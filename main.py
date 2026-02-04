@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from routers import admin
 
 app = FastAPI()
 
@@ -25,3 +26,6 @@ async def login(login_request: LoginRequest):
         return {"msg": "Acceso concedido", "rol": "user"}  # usa "user" para que sea consistente
 
     raise HTTPException(status_code=400, detail="Credenciales incorrectas")
+
+
+app.include_router(admin.router)
