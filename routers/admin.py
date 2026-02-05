@@ -25,7 +25,7 @@ class UserUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
     password: Optional[str] = None
-    type: Optional[int] = Field(None, ge=1, le=2)
+    type: Optional[int] = Field(None, ge = 1, le = 2)
 
 users: list[User] = []
 
@@ -38,7 +38,6 @@ async def add_user(user: UserCreate):
         password = user.password,
         type = user.type
     )
-
     users.append(newUser)
     return {
         "msg": "",
@@ -56,6 +55,22 @@ async def get_user(user_id: str):
     raise HTTPException(
         status_code=404,
         detail="User id no encontrado.")
+
+@router.get("/")
+async def get_users(user_type: Optional[int] = Query(default=None, ge=1, le=2)):
+    if user_type is None:
+        return {
+            "msg": "",
+            "data": users
+        }
+    usersFiltro: list[User] = []
+    for user in users:
+        if user.type == user_type:
+            usersFiltro.append(user)
+    return {
+        "msg": "",
+        "data": usersFiltro
+    }
 
 @router.patch("/{user_id}")
 async def update_user(UpdatedUser: UserUpdate, user_id: str):
