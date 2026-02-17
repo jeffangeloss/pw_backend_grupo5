@@ -1,6 +1,8 @@
-from sqlalchemy import UUID, Column, DateTime, Double, Integer, String
+from sqlalchemy import UUID, Column, DateTime, Double, String, ForeignKey
 from .database import Base
+from sqlalchemy.orm import relationship
 import uuid
+from datetime import datetime
 
 # TABLAS POR DEFINIRSE, ESTAS NO SON LAS FINALES
 
@@ -23,9 +25,10 @@ class RolBase():
         default=lambda: str(uuid.uuid4()),
         index=True
     )
-    nombre = Column(String)
+    nombre = Column((String), unique=True)
 
 #este se refiere a navegadores chrome, edge. etc.
+# Lau: creo q mejor sea un atributo de acceso para no complicar
 class NavegadorBase():
     __tablename__ = "navegador"
     id = Column(
@@ -58,7 +61,7 @@ class UserBase(Base):
         index=True
     )
     name = Column(String)
-    email = Column(String)
+    email = Column((String), unique=True)
     password = Column(String)
     # rol_id
     # accesos (?)
