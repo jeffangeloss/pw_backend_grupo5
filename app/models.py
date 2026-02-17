@@ -4,9 +4,9 @@ from sqlalchemy.orm import relationship
 import uuid
 from datetime import datetime
 
-# TABLAS POR DEFINIRSE, ESTAS NO SON LAS FINALES
+# TABLAS EN PROCESO...
 
-class CategoriaBase():
+class CategoriaBase(Base):
     __tablename__ = "categoria"
     id = Column(
         UUID(as_uuid=True),
@@ -14,10 +14,10 @@ class CategoriaBase():
         default=lambda: str(uuid.uuid4()),
         index=True
     )
-    nombre = Column(String)
+    nombre = Column(String, unique=True)
+    egresos = relationship("Egreso", back_populates="categoria")
 
-# admin o usuario
-class RolBase():
+class RolBase(Base):
     __tablename__ = "rol"
     id = Column(
         UUID(as_uuid=True),
@@ -25,11 +25,12 @@ class RolBase():
         default=lambda: str(uuid.uuid4()),
         index=True
     )
-    nombre = Column((String), unique=True)
+    nombre = Column(String, unique=True)
+    usuarios = relationship("Usuario", back_populates="rol")
 
 #este se refiere a navegadores chrome, edge. etc.
 # Lau: creo q mejor sea un atributo de acceso para no complicar
-class NavegadorBase():
+class NavegadorBase(Base):
     __tablename__ = "navegador"
     id = Column(
         UUID(as_uuid=True),
@@ -39,21 +40,8 @@ class NavegadorBase():
     )
     nombre = Column(String)
 
-class AccesoBase():
-    __tablename__ = "acceso"
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=lambda: str(uuid.uuid4()),
-        index=True
-    )
-    fecha = Column(DateTime)
-    # accion (tabla?)
-    # navegador_id
-    # user_id
-
 class UserBase(Base):
-    __tablename__ = "user"
+    __tablename__ = "usuario"
     id = Column(
         UUID(as_uuid=True),
         primary_key=True,
@@ -61,12 +49,17 @@ class UserBase(Base):
         index=True
     )
     name = Column(String)
-    email = Column((String), unique=True)
-    password = Column(String)
-    # rol_id
-    # accesos (?)
+    email = Column(String, unique=True, nullable=False)
+    contra_hash = Column(String)
+    rol_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("rol.id")
+    )
+    rol = relationship("Rol", back_populates="usuarios")
+    egresos = relationship("Egreso", back_populates="usuario")
+    accesos = relationship("Acceso", back_populates="usuario")
 
-class EgresoBase():
+class EgresoBase(Base):
     __tablename__ = "egreso"
     id = Column(
         UUID(as_uuid=True),
@@ -77,5 +70,36 @@ class EgresoBase():
     fecha = Column(DateTime)
     descripcion = Column(String)
     monto = Column(Double)
-    # user_id
-    # categoria_id
+    usuario_id = Column(
+        UUID(as_uuid=True), 
+        ForeignKey("usuario.id"))
+    categoria_id = Column(
+        UUID(as_uuid=True), 
+        ForeignKey("categoria.id"))
+    usuario = relationship("Usuario", back_populates="egresos")
+    categoria = relationship("Categoria", back_populates="egresos")
+
+class EstadoBase(Base):
+    __tablename__ = "estado"
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+        index=True
+    )
+    nombre = Column(String, unique=True)
+    accesos = relationship("Acceso", back_populates="estado")
+
+class AccesoBase(Base):
+    __tablename__ = "acceso"
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+        index=True
+    )
+    fecha = Column(DateTime)
+    usuario_id = Column(UUID(as_uuid=True), ForeignKey("usuario.id"))
+    estado_id = Column(UUID(as_uuid=True), ForeignKey("estado.id"))
+    usuario = relationship("Usuario", back_populates="accesos")
+    estado = relationship("Estado", back_populates="accesos")
