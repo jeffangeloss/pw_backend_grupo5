@@ -6,9 +6,10 @@ from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 
+
 from .database import get_db, session
 from .models import Usuario
-from .routers import admin
+from .routers import admin, resetPass
 from .schemas import LoginRequest
 from .security import (
     DUMMY_HASH,
@@ -139,3 +140,4 @@ async def read_me(current_user: Usuario = Depends(get_current_user)):
 
 
 app.include_router(admin.router)
+app.include_router(resetPass.router)

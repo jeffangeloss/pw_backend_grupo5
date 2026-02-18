@@ -24,3 +24,6 @@ class UserUpdate(BaseModel):
     email: Optional[str] = None
     password: Optional[str] = None
     type: Optional[int] = Field(None, ge = 1, le = 2)
+
+class ResetRequest(BaseModel):
+    email: str
