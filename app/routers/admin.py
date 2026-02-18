@@ -1,7 +1,9 @@
 from typing import Optional
-from fastapi import HTTPException, APIRouter, Query
+from fastapi import HTTPException, APIRouter, Query, Header
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 from uuid import uuid4
+import datetime
 
 router = APIRouter(
     prefix="/users",
@@ -98,3 +100,6 @@ async def delete_user(user_id: str):
         detail="User id no encontrado."
     )
 
+@router.get("/auditoria/{user_id}")
+async def get_logs_user(user_id: str):
+    pass
