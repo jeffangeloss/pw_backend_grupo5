@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 
 # TABLAS EN PROCESO...
+# hola
 
 class CategoriaBase(Base):
     __tablename__ = "categoria"
