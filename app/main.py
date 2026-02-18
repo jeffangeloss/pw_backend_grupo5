@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 from .database import get_db, session
 from .models import Usuario
 from .routers import admin
+from .schemas import LoginRequest
 from .security import (
     DUMMY_HASH,
     create_access_token,
@@ -27,9 +28,6 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-class LoginRequest(BaseModel):
-    correo: str
-    password: str
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 

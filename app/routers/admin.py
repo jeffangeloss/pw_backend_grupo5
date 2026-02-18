@@ -1,5 +1,6 @@
 from typing import Optional
 from fastapi import HTTPException, APIRouter, Query, Header
+from ..schemas import User, UserCreate, UserUpdate
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from uuid import uuid4
@@ -9,25 +10,6 @@ router = APIRouter(
     prefix="/users",
     tags=["Users"]
 )
-
-class User(BaseModel):
-    id: str
-    name: str
-    email: str
-    password: str
-    type: int = Field(..., ge = 1, le = 2)
-
-class UserCreate(BaseModel):
-    name: str
-    email: str
-    password: str
-    type: int = Field(..., ge=1, le=2)
-
-class UserUpdate(BaseModel):
-    name: Optional[str] = None
-    email: Optional[str] = None
-    password: Optional[str] = None
-    type: Optional[int] = Field(None, ge = 1, le = 2)
 
 users: list[User] = []
 
