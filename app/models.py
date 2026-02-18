@@ -29,18 +29,6 @@ class Rol(Base):
     nombre = Column(String, unique=True)
     usuarios = relationship("Usuario", back_populates="rol")
 
-#este se refiere a navegadores chrome, edge. etc.
-# Lau: creo q mejor sea un atributo de acceso para no complicar
-class Navegador(Base):
-    __tablename__ = "navegador"
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=lambda: str(uuid.uuid4()),
-        index=True
-    )
-    nombre = Column(String)
-
 class Usuario(Base):
     __tablename__ = "usuario"
     id = Column(
@@ -100,6 +88,7 @@ class Acceso(Base):
         index=True
     )
     fecha = Column(DateTime)
+    navegador = Column(String)
     usuario_id = Column(UUID(as_uuid=True), ForeignKey("usuario.id"))
     estado_id = Column(UUID(as_uuid=True), ForeignKey("estado.id"))
     usuario = relationship("Usuario", back_populates="accesos")
