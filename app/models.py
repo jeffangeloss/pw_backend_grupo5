@@ -7,7 +7,7 @@ from datetime import datetime
 # TABLAS EN PROCESO...
 # hola
 
-class CategoriaBase(Base):
+class Categoria(Base):
     __tablename__ = "categoria"
     id = Column(
         UUID(as_uuid=True),
@@ -18,7 +18,7 @@ class CategoriaBase(Base):
     nombre = Column(String, unique=True)
     egresos = relationship("Egreso", back_populates="categoria")
 
-class RolBase(Base):
+class Rol(Base):
     __tablename__ = "rol"
     id = Column(
         UUID(as_uuid=True),
@@ -31,7 +31,7 @@ class RolBase(Base):
 
 #este se refiere a navegadores chrome, edge. etc.
 # Lau: creo q mejor sea un atributo de acceso para no complicar
-class NavegadorBase(Base):
+class Navegador(Base):
     __tablename__ = "navegador"
     id = Column(
         UUID(as_uuid=True),
@@ -41,7 +41,7 @@ class NavegadorBase(Base):
     )
     nombre = Column(String)
 
-class UserBase(Base):
+class User(Base):
     __tablename__ = "usuario"
     id = Column(
         UUID(as_uuid=True),
@@ -60,7 +60,7 @@ class UserBase(Base):
     egresos = relationship("Egreso", back_populates="usuario")
     accesos = relationship("Acceso", back_populates="usuario")
 
-class EgresoBase(Base):
+class Egreso(Base):
     __tablename__ = "egreso"
     id = Column(
         UUID(as_uuid=True),
@@ -80,7 +80,7 @@ class EgresoBase(Base):
     usuario = relationship("Usuario", back_populates="egresos")
     categoria = relationship("Categoria", back_populates="egresos")
 
-class EstadoBase(Base):
+class Estado(Base):
     __tablename__ = "estado"
     id = Column(
         UUID(as_uuid=True),
@@ -91,7 +91,7 @@ class EstadoBase(Base):
     nombre = Column(String, unique=True)
     accesos = relationship("Acceso", back_populates="estado")
 
-class AccesoBase(Base):
+class Acceso(Base):
     __tablename__ = "acceso"
     id = Column(
         UUID(as_uuid=True),

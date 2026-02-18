@@ -2,8 +2,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 
-# FALTA MODIFICAR ESTO
-SQLALCHEMY_DATABASE_URL = "postgresql://rol:contra@localhost:5432/nombre_db"
+# USUARIO: FINANZAS
+# CONTRASEÑA: FINANZAS$616
+SQLALCHEMY_DATABASE_URL = "postgresql://finanzas:finanzas$616@localhost:5432/finanzas_db"
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
