@@ -11,7 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 
 from .database import get_db, session
-from .models import Acceso, Estado, Navegador, Usuario
+from .models import Acceso, Estado, Navegador, SistemaOperativo, Usuario
 from .routers import admin
 from .security import DUMMY_HASH, get_password_hash, is_password_hashed, verify_password
 
@@ -26,9 +26,18 @@ BROWSER_CATALOG = [
     "Desconocido",
 ]
 
+OS_CATALOG = [
+    "Windows",
+    "macOS",
+    "Linux",
+    "Android",
+    "iOS",
+    "Desconocido",
+]
+
 
 def migrate_plain_passwords_to_hash() -> None:
-    # BLOQUE SEGURIDAD: migra contraseñas en texto plano a hash Argon2.
+    # BLOQUE SEGURIDAD: migra passwords en texto plano a hash Argon2.
     db = session()
     try:
         users = db.query(Usuario).filter(Usuario.contra_hash.isnot(None)).all()
@@ -42,14 +51,14 @@ def migrate_plain_passwords_to_hash() -> None:
             db.commit()
     except SQLAlchemyError:
         db.rollback()
-        # BLOQUE SEGURIDAD: evita caída de la API si falla esta migración.
-        print("No se pudo completar la migración de passwords a hash.")
+        # BLOQUE SEGURIDAD: evita caida total de la API si falla la migracion.
+        print("No se pudo completar la migracion de passwords a hash.")
     finally:
         db.close()
 
 
 def ensure_browser_catalog() -> None:
-    # BLOQUE NAVEGADOR: asegura catálogo base de navegadores en BD.
+    # BLOQUE AUDITORIA: asegura catalogo base de navegadores en BD.
     db = session()
     try:
         existing_names = {row[0] for row in db.query(Navegador.nombre).all()}
@@ -59,7 +68,23 @@ def ensure_browser_catalog() -> None:
         db.commit()
     except SQLAlchemyError:
         db.rollback()
-        print("No se pudo sincronizar catálogo de navegadores.")
+        print("No se pudo sincronizar catalogo de navegadores.")
+    finally:
+        db.close()
+
+
+def ensure_os_catalog() -> None:
+    # BLOQUE AUDITORIA: asegura catalogo base de sistemas operativos en BD.
+    db = session()
+    try:
+        existing_names = {row[0] for row in db.query(SistemaOperativo.nombre).all()}
+        for os_name in OS_CATALOG:
+            if os_name not in existing_names:
+                db.add(SistemaOperativo(id=uuid.uuid4(), nombre=os_name))
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        print("No se pudo sincronizar catalogo de sistemas operativos.")
     finally:
         db.close()
 
@@ -69,7 +94,7 @@ def _normalize_action_name(action_name: str) -> str:
 
 
 def _detect_browser_name(user_agent: str | None, sec_ch_ua: str | None = None) -> str:
-    # BLOQUE NAVEGADOR: primero priorizamos Client Hints.
+    # BLOQUE AUDITORIA: primero priorizamos Client Hints.
     ch = (sec_ch_ua or "").lower()
     if "brave" in ch:
         return "Brave"
@@ -84,7 +109,7 @@ def _detect_browser_name(user_agent: str | None, sec_ch_ua: str | None = None) -
     if "chrome" in ch or "chromium" in ch:
         return "Chrome"
 
-    # BLOQUE NAVEGADOR: fallback clásico con User-Agent.
+    # BLOQUE AUDITORIA: fallback clasico con User-Agent.
     ua = (user_agent or "").lower()
     if "brave" in ua:
         return "Brave"
@@ -95,10 +120,38 @@ def _detect_browser_name(user_agent: str | None, sec_ch_ua: str | None = None) -
     if "opr/" in ua or "opera" in ua:
         return "Opera"
     if "chrome/" in ua and "edg/" not in ua:
-        # Brave suele identificarse como Chrome en UA; si no llegó CH, cae aquí.
         return "Chrome"
     if "safari/" in ua and "chrome/" not in ua:
         return "Safari"
+    return "Desconocido"
+
+
+def _detect_os_name(user_agent: str | None, sec_ch_ua_platform: str | None = None) -> str:
+    # BLOQUE AUDITORIA: Client Hints para plataforma real del navegador.
+    platform_hint = (sec_ch_ua_platform or "").strip().strip('"').lower()
+    if "windows" in platform_hint:
+        return "Windows"
+    if "android" in platform_hint:
+        return "Android"
+    if "ios" in platform_hint:
+        return "iOS"
+    if "mac" in platform_hint:
+        return "macOS"
+    if "linux" in platform_hint:
+        return "Linux"
+
+    # BLOQUE AUDITORIA: fallback usando User-Agent.
+    ua = (user_agent or "").lower()
+    if "android" in ua:
+        return "Android"
+    if "iphone" in ua or "ipad" in ua or "ipod" in ua:
+        return "iOS"
+    if "windows nt" in ua:
+        return "Windows"
+    if "macintosh" in ua or "mac os x" in ua:
+        return "macOS"
+    if "linux" in ua:
+        return "Linux"
     return "Desconocido"
 
 
@@ -134,6 +187,17 @@ def _get_or_create_navegador(db: Session, browser_name: str) -> Navegador:
     return navegador
 
 
+def _get_or_create_so(db: Session, os_name: str) -> SistemaOperativo:
+    sistema_operativo = db.query(SistemaOperativo).filter(SistemaOperativo.nombre == os_name).first()
+    if sistema_operativo:
+        return sistema_operativo
+
+    sistema_operativo = SistemaOperativo(id=uuid.uuid4(), nombre=os_name)
+    db.add(sistema_operativo)
+    db.flush()
+    return sistema_operativo
+
+
 def _create_access_log(
     db: Session,
     *,
@@ -143,12 +207,17 @@ def _create_access_log(
     token: str | None,
     active: bool,
 ) -> Acceso:
-    # BLOQUE AUDITORIA: registra evento de acceso con navegador e IP.
+    # BLOQUE AUDITORIA: registra evento con navegador, SO e IP.
     browser_name = _detect_browser_name(
         request.headers.get("user-agent"),
         request.headers.get("sec-ch-ua"),
     )
+    os_name = _detect_os_name(
+        request.headers.get("user-agent"),
+        request.headers.get("sec-ch-ua-platform"),
+    )
     navegador = _get_or_create_navegador(db, browser_name)
+    sistema_operativo = _get_or_create_so(db, os_name)
     estado = _get_or_create_estado(db, action_name)
 
     access = Acceso(
@@ -160,6 +229,7 @@ def _create_access_log(
         usuario_id=user.id if user else None,
         estado_id=estado.id,
         navegador_id=navegador.id,
+        so_id=sistema_operativo.id,
     )
     db.add(access)
     return access
@@ -170,6 +240,7 @@ async def lifespan(app: FastAPI):
     # BLOQUE LIFESPAN: reemplaza startup event deprecado.
     migrate_plain_passwords_to_hash()
     ensure_browser_catalog()
+    ensure_os_catalog()
     yield
 
 
@@ -182,10 +253,11 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
+
 class LoginRequest(BaseModel):
-    # BLOQUE LOGIN: mantenemos username como en tu estructura.
+    # BLOQUE LOGIN: mantenemos username para frontend actual.
     username: Optional[str] = Field(default=None, min_length=5)
-    # BLOQUE COMPAT: también acepta "correo" para no romper clientes actuales.
+    # BLOQUE COMPAT: tambien acepta "correo" para clientes antiguos.
     correo: Optional[str] = Field(default=None, min_length=5)
     password: str = Field(..., min_length=8)
 
@@ -193,12 +265,13 @@ class LoginRequest(BaseModel):
 class LogoutRequest(BaseModel):
     token: str = Field(..., min_length=8)
 
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 
 @app.post("/login")
 async def login(login_request: LoginRequest, request: Request, db: Session = Depends(get_db)):
-    # BLOQUE LOGIN BD: validación real contra tabla usuario de PostgreSQL.
+    # BLOQUE LOGIN BD: validacion real contra tabla usuario en PostgreSQL.
     username = (login_request.username or login_request.correo or "").strip().lower()
     if not username:
         raise HTTPException(status_code=400, detail="Username/correo requerido")
@@ -211,7 +284,7 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
     )
 
     if not user:
-        # BLOQUE SEGURIDAD: tiempo similar entre usuario existente/no existente.
+        # BLOQUE SEGURIDAD: tiempo similar entre usuario existente y no existente.
         verify_password(login_request.password, DUMMY_HASH)
         _create_access_log(
             db,
@@ -230,7 +303,7 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
     if is_password_hashed(user.contra_hash):
         password_ok = verify_password(login_request.password, user.contra_hash)
     else:
-        # BLOQUE COMPAT: si quedó texto plano, permite login y migra a hash.
+        # BLOQUE COMPAT: si quedo texto plano, permite login y migra a hash.
         password_ok = user.contra_hash == login_request.password
         if password_ok:
             user.contra_hash = get_password_hash(login_request.password)
@@ -248,7 +321,7 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
         db.commit()
         raise HTTPException(status_code=400, detail="Credenciales incorrectas")
 
-    # BLOQUE TOKEN BD: creamos y guardamos token de sesión en tabla acceso.
+    # BLOQUE TOKEN BD: creamos y guardamos token de sesion en tabla acceso.
     session_token = str(uuid.uuid4())
     _create_access_log(
         db,
@@ -260,7 +333,6 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
     )
     db.commit()
 
-    # BLOQUE LOGIN BD: el rol vuelve desde la relación Usuario -> Rol.
     role_name = user.rol.nombre if user.rol else "user"
 
     return {
@@ -268,7 +340,6 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
         "rol": role_name,
         "email": user.email,
         "name": user.name,
-        # BLOQUE LOGIN: token simple para frontend (y futuras operaciones CRUD).
         "token": session_token,
         "access_token": session_token,
         "token_type": "bearer",
@@ -327,7 +398,7 @@ async def logout(
     if not ok:
         return {"msg": "Token no existe"}
 
-    return {"msg": "Sesión cerrada"}
+    return {"msg": "Sesion cerrada"}
 
 
 @app.get("/logout")
@@ -336,11 +407,11 @@ async def logout_get(token: str, request: Request, db: Session = Depends(get_db)
     ok = _invalidate_token(token, request, db)
     if not ok:
         return {"msg": "Token no existe"}
-    return {"msg": "Sesión cerrada"}
+    return {"msg": "Sesion cerrada"}
 
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> Usuario:
-    # BLOQUE SEGURIDAD: valida token de sesión guardado en BD.
+    # BLOQUE SEGURIDAD: valida token de sesion guardado en BD.
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="No autorizado",

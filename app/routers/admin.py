@@ -81,7 +81,7 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
     try:
         user_uuid = UUID(user_id)
     except ValueError:
-        raise HTTPException(status_code=400, detail="User id inválido")
+        raise HTTPException(status_code=400, detail="User id invalido")
 
     user = (
         db.query(Usuario)
@@ -130,7 +130,7 @@ async def get_users(
             .first()
         )
 
-        last_access = latest_access.fecha.strftime("%d/%m/%Y") if latest_access and latest_access.fecha else "—"
+        last_access = latest_access.fecha.strftime("%d/%m/%Y") if latest_access and latest_access.fecha else "-"
 
         data.append({
             "id": str(user.id),
@@ -149,7 +149,7 @@ async def update_user(updated_user: UserUpdate, user_id: str, db: Session = Depe
     try:
         user_uuid = UUID(user_id)
     except ValueError:
-        raise HTTPException(status_code=400, detail="User id inválido")
+        raise HTTPException(status_code=400, detail="User id invalido")
 
     user = db.query(Usuario).options(joinedload(Usuario.rol)).filter(Usuario.id == user_uuid).first()
     if not user:
@@ -189,7 +189,7 @@ async def delete_user(user_id: str, db: Session = Depends(get_db)):
     try:
         user_uuid = UUID(user_id)
     except ValueError:
-        raise HTTPException(status_code=400, detail="User id inválido")
+        raise HTTPException(status_code=400, detail="User id invalido")
 
     user = db.query(Usuario).filter(Usuario.id == user_uuid).first()
     if not user:
@@ -205,7 +205,7 @@ async def get_logs_user(user_id: str, db: Session = Depends(get_db)):
     try:
         user_uuid = UUID(user_id)
     except ValueError:
-        raise HTTPException(status_code=400, detail="User id inválido")
+        raise HTTPException(status_code=400, detail="User id invalido")
 
     user = db.query(Usuario).options(joinedload(Usuario.rol)).filter(Usuario.id == user_uuid).first()
     if not user:
@@ -213,7 +213,11 @@ async def get_logs_user(user_id: str, db: Session = Depends(get_db)):
 
     logs_db = (
         db.query(Acceso)
-        .options(joinedload(Acceso.estado), joinedload(Acceso.navegador))
+        .options(
+            joinedload(Acceso.estado),
+            joinedload(Acceso.navegador),
+            joinedload(Acceso.sistema_operativo),
+        )
         .filter(Acceso.usuario_id == user_uuid)
         .order_by(Acceso.fecha.desc())
         .all()
@@ -223,9 +227,10 @@ async def get_logs_user(user_id: str, db: Session = Depends(get_db)):
     for access in logs_db:
         logs.append({
             "navegador": access.navegador.nombre if access.navegador else "Desconocido",
-            "ip": access.ip or "—",
-            "fecha": access.fecha.strftime("%d/%m/%Y") if access.fecha else "—",
-            "hora": access.fecha.strftime("%H:%M") if access.fecha else "—",
+            "sistema_operativo": access.sistema_operativo.nombre if access.sistema_operativo else "Desconocido",
+            "ip": access.ip or "-",
+            "fecha": access.fecha.strftime("%d/%m/%Y") if access.fecha else "-",
+            "hora": access.fecha.strftime("%H:%M") if access.fecha else "-",
             "accion": (access.estado.nombre if access.estado else "DESCONOCIDA").upper(),
         })
 
