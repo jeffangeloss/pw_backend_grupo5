@@ -41,7 +41,7 @@ class Navegador(Base):
     )
     nombre = Column(String)
 
-class User(Base):
+class Usuario(Base):
     __tablename__ = "usuario"
     id = Column(
         UUID(as_uuid=True),
