@@ -1,4 +1,4 @@
-from sqlalchemy import UUID, Column, DateTime, Double, String, ForeignKey
+from sqlalchemy import UUID, Boolean, Column, DateTime, Double, String, ForeignKey
 from .database import Base
 from sqlalchemy.orm import relationship
 import uuid
@@ -40,6 +40,7 @@ class Navegador(Base):
         index=True
     )
     nombre = Column(String)
+    accesos = relationship("Acceso", back_populates="navegador")
 
 class Usuario(Base):
     __tablename__ = "usuario"
@@ -100,7 +101,12 @@ class Acceso(Base):
         index=True
     )
     fecha = Column(DateTime)
+    ip = Column(String)
+    token = Column(String, index=True)
+    activo = Column(Boolean, default=False, nullable=False)
     usuario_id = Column(UUID(as_uuid=True), ForeignKey("usuario.id"))
     estado_id = Column(UUID(as_uuid=True), ForeignKey("estado.id"))
+    navegador_id = Column(UUID(as_uuid=True), ForeignKey("navegador.id"))
     usuario = relationship("Usuario", back_populates="accesos")
     estado = relationship("Estado", back_populates="accesos")
+    navegador = relationship("Navegador", back_populates="accesos")
