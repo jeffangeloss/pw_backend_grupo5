@@ -25,6 +25,8 @@ MarkupSafe==3.0.3
 mdurl==0.1.2
 orjson==3.11.7
 psycopg2-binary==2.9.11
+pwdlib[argon2]==0.3.0
+PyJWT==2.11.0
 pydantic==2.12.5
 pydantic-extra-types==2.11.0
 pydantic-settings==2.12.0
