@@ -1,7 +1,7 @@
 from typing import Optional
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
 
@@ -10,8 +10,8 @@ from app.models import Acceso, Estado, Rol, Usuario
 from app.security import get_password_hash
 
 router = APIRouter(
-    prefix="/users",
-    tags=["Users"]
+    prefix="/admin",
+    tags=["Admin"]
 )
 
 
@@ -40,6 +40,26 @@ def _role_label(role_name: str | None):
 def _user_type_by_role(role_name: str | None):
     return 2 if (role_name or "").lower() == "admin" else 1
 
+async def verify_token(x_token : str = Header(...), db: Session = Depends(get_db)):
+    db_query = db.query(user_token).filter(user_token.token_id == x_token)
+    db_acceso = db_query.first()
+    if  not db_acceso:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "msg": "Token incorrecto."
+            }
+        )
+    if db_acceso.revoked_at is not None:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "msg": "Token vencido.."
+            }
+        )
+    
+    return x_token
+
 
 @router.put("/")
 async def add_user(user: UserCreate, db: Session = Depends(get_db)):
@@ -48,30 +68,25 @@ async def add_user(user: UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Email ya registrado")
 
     role_name = _role_name_by_type(user.type)
-    role = db.query(Rol).filter(Rol.nombre == role_name).first()
-    if not role:
-        role = Rol(id=uuid4(), nombre=role_name)
-        db.add(role)
-        db.flush()
 
     db_user = Usuario(
         id=uuid4(),
         name=user.name,
-        email=user.email.strip().lower(),
+        email=user.email.strip(),
         contra_hash=get_password_hash(user.password),
-        rol_id=role.id,
+        rol_id=user.type,
     )
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
 
     return {
-        "msg": "Usuario creado",
+        "msg": "Usuario creado correctamente.",
         "user": {
             "id": str(db_user.id),
             "name": db_user.name,
             "email": db_user.email,
-            "type": user.type,
+            "role": role_name,
         }
     }
 
@@ -98,7 +113,7 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
             "id": str(user.id),
             "name": user.name,
             "email": user.email,
-            "type": _user_type_by_role(user.rol.nombre if user.rol else None),
+            "role": _user_type_by_role(user.rol.nombre if user.rol else None),
         }
     }
 
