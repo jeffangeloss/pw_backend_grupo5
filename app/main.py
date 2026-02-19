@@ -37,7 +37,7 @@ OS_CATALOG = [
 ]
 
 
-def migrate_plain_passwords_to_hash() -> None:
+def migrate_plain_passwords_to_hash():
     # BLOQUE SEGURIDAD: migra passwords en texto plano a hash Argon2.
     db = session()
     try:
@@ -58,7 +58,7 @@ def migrate_plain_passwords_to_hash() -> None:
         db.close()
 
 
-def ensure_browser_catalog() -> None:
+def ensure_browser_catalog():
     # BLOQUE AUDITORIA: asegura catalogo base de navegadores en BD.
     db = session()
     try:
@@ -74,7 +74,7 @@ def ensure_browser_catalog() -> None:
         db.close()
 
 
-def ensure_os_catalog() -> None:
+def ensure_os_catalog():
     # BLOQUE AUDITORIA: asegura catalogo base de sistemas operativos en BD.
     db = session()
     try:
@@ -90,11 +90,11 @@ def ensure_os_catalog() -> None:
         db.close()
 
 
-def _normalize_action_name(action_name: str) -> str:
+def _normalize_action_name(action_name: str):
     return action_name.strip().upper()
 
 
-def _detect_browser_name(user_agent: str | None, sec_ch_ua: str | None = None) -> str:
+def _detect_browser_name(user_agent: str | None, sec_ch_ua: str | None = None):
     # BLOQUE AUDITORIA: primero priorizamos Client Hints.
     ch = (sec_ch_ua or "").lower()
     if "brave" in ch:
@@ -127,7 +127,7 @@ def _detect_browser_name(user_agent: str | None, sec_ch_ua: str | None = None) -
     return "Desconocido"
 
 
-def _detect_os_name(user_agent: str | None, sec_ch_ua_platform: str | None = None) -> str:
+def _detect_os_name(user_agent: str | None, sec_ch_ua_platform: str | None = None):
     # BLOQUE AUDITORIA: Client Hints para plataforma real del navegador.
     platform_hint = (sec_ch_ua_platform or "").strip().strip('"').lower()
     if "windows" in platform_hint:
@@ -156,7 +156,7 @@ def _detect_os_name(user_agent: str | None, sec_ch_ua_platform: str | None = Non
     return "Desconocido"
 
 
-def _extract_client_ip(request: Request) -> str:
+def _extract_client_ip(request: Request):
     forwarded_for = request.headers.get("x-forwarded-for")
     if forwarded_for:
         return forwarded_for.split(",")[0].strip()
@@ -165,7 +165,7 @@ def _extract_client_ip(request: Request) -> str:
     return "0.0.0.0"
 
 
-def _get_or_create_estado(db: Session, action_name: str) -> Estado:
+def _get_or_create_estado(db: Session, action_name: str):
     normalized_name = _normalize_action_name(action_name)
     estado = db.query(Estado).filter(Estado.nombre == normalized_name).first()
     if estado:
@@ -177,7 +177,7 @@ def _get_or_create_estado(db: Session, action_name: str) -> Estado:
     return estado
 
 
-def _get_or_create_navegador(db: Session, browser_name: str) -> Navegador:
+def _get_or_create_navegador(db: Session, browser_name: str):
     navegador = db.query(Navegador).filter(Navegador.nombre == browser_name).first()
     if navegador:
         return navegador
@@ -188,7 +188,7 @@ def _get_or_create_navegador(db: Session, browser_name: str) -> Navegador:
     return navegador
 
 
-def _get_or_create_so(db: Session, os_name: str) -> SistemaOperativo:
+def _get_or_create_so(db: Session, os_name: str):
     sistema_operativo = db.query(SistemaOperativo).filter(SistemaOperativo.nombre == os_name).first()
     if sistema_operativo:
         return sistema_operativo
@@ -207,7 +207,7 @@ def _create_access_log(
     request: Request,
     token: str | None,
     active: bool,
-) -> Acceso:
+):
     # BLOQUE AUDITORIA: registra evento con navegador, SO e IP.
     browser_name = _detect_browser_name(
         request.headers.get("user-agent"),
@@ -347,7 +347,7 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
     }
 
 
-def _invalidate_token(token: str, request: Request, db: Session) -> bool:
+def _invalidate_token(token: str, request: Request, db: Session):
     # BLOQUE LOGOUT: invalida token activo y deja traza de LOGOUT.
     access_active = (
         db.query(Acceso)
@@ -411,7 +411,7 @@ async def logout_get(token: str, request: Request, db: Session = Depends(get_db)
     return {"msg": "Sesion cerrada"}
 
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> Usuario:
+def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     # BLOQUE SEGURIDAD: valida token de sesion guardado en BD.
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

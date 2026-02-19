@@ -29,15 +29,15 @@ class UserUpdate(BaseModel):
     type: Optional[int] = Field(None, ge=1, le=2)
 
 
-def _role_name_by_type(user_type: int) -> str:
+def _role_name_by_type(user_type: int):
     return "admin" if user_type == 2 else "user"
 
 
-def _role_label(role_name: str | None) -> str:
+def _role_label(role_name: str | None):
     return "Administrador" if (role_name or "").lower() == "admin" else "Usuario"
 
 
-def _user_type_by_role(role_name: str | None) -> int:
+def _user_type_by_role(role_name: str | None):
     return 2 if (role_name or "").lower() == "admin" else 1
 
 
