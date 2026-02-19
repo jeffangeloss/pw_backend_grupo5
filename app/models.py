@@ -1,8 +1,7 @@
-from sqlalchemy import UUID, Column, DateTime, Double, String, ForeignKey
+from sqlalchemy import UUID, Boolean, Column, DateTime, Double, String, ForeignKey
 from .database import Base
 from sqlalchemy.orm import relationship
 import uuid
-from datetime import datetime
 
 # TABLAS EN PROCESO...
 # hola
@@ -28,6 +27,30 @@ class Rol(Base):
     )
     nombre = Column(String, unique=True)
     usuarios = relationship("Usuario", back_populates="rol")
+
+# BLOQUE AUDITORIA: catalogo de navegadores.
+class Navegador(Base):
+    __tablename__ = "navegador"
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+        index=True
+    )
+    nombre = Column(String)
+    accesos = relationship("Acceso", back_populates="navegador")
+
+# BLOQUE AUDITORIA: catalogo de sistemas operativos.
+class SistemaOperativo(Base):
+    __tablename__ = "sistema_operativo"
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+        index=True
+    )
+    nombre = Column(String, unique=True)
+    accesos = relationship("Acceso", back_populates="sistema_operativo")
 
 class Usuario(Base):
     __tablename__ = "usuario"
@@ -88,8 +111,14 @@ class Acceso(Base):
         index=True
     )
     fecha = Column(DateTime)
-    navegador = Column(String)
+    ip = Column(String)
+    token = Column(String, index=True)
+    activo = Column(Boolean, default=False, nullable=False)
     usuario_id = Column(UUID(as_uuid=True), ForeignKey("usuario.id"))
     estado_id = Column(UUID(as_uuid=True), ForeignKey("estado.id"))
+    navegador_id = Column(UUID(as_uuid=True), ForeignKey("navegador.id"))
+    so_id = Column(UUID(as_uuid=True), ForeignKey("sistema_operativo.id"))
     usuario = relationship("Usuario", back_populates="accesos")
     estado = relationship("Estado", back_populates="accesos")
+    navegador = relationship("Navegador", back_populates="accesos")
+    sistema_operativo = relationship("SistemaOperativo", back_populates="accesos")
