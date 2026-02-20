@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from ..security import create_access_token
 from ..schemas import ResetRequest
 from ..database import get_db
-from ..models import Usuario
+from ..models import User as Usuario
 
 router = APIRouter(
     prefix="/reset-contra",
