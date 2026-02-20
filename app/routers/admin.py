@@ -1,36 +1,12 @@
 from typing import Optional
 from uuid import UUID, uuid4
-
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session, joinedload
-
 from app.database import get_db
 from app.models import User, AccessLog, AccessEventType, UserToken
 from app.security import get_password_hash
 
-router = APIRouter(
-    prefix="/admin",
-    tags=["Admin"]
-)
-
-
-class UserCreate(BaseModel):
-    full_name: str
-    email: EmailStr
-    password: str
-    type: int = Field(..., ge=1, le=2)
-
-
-class UserUpdate(BaseModel):
-    full_name: Optional[str] = Field(None)
-    email: Optional[EmailStr] = None
-    password: Optional[str] = None
-    type: Optional[int] = Field(None, ge=1, le=2)
-
-
-def _get_role_string(user_type: int):
-    return "admin" if user_type == 2 else "user"
 
 async def verify_admin_token(x_token : str = Header(...), db: Session = Depends(get_db)):
     db_query = db.query(UserToken).filter(UserToken.token_id == x_token)
@@ -62,6 +38,27 @@ async def verify_admin_token(x_token : str = Header(...), db: Session = Depends(
     
     return db_token.user
 
+router = APIRouter(
+    prefix="/admin",
+    tags=["Admin"],
+    dependencies=[Depends(verify_admin_token)]
+)
+
+class UserCreate(BaseModel):
+    full_name: str
+    email: EmailStr
+    password: str
+    type: int = Field(..., ge=1, le=2)
+
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = Field(None)
+    email: Optional[EmailStr] = None
+    password: Optional[str] = None
+    type: Optional[int] = Field(None, ge=1, le=2)
+
+def _get_role_string(user_type: int):
+    return "admin" if user_type == 2 else "user"
+
 
 @router.put("/")
 async def add_user(user: UserCreate, db: Session = Depends(get_db)):
@@ -92,14 +89,9 @@ async def add_user(user: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/{user_id}")
-async def get_user(user_id: str, db: Session = Depends(get_db)):
-    try:
-        user_uuid = UUID(user_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="User id invalido")
-
+async def get_user(user_id: UUID, db: Session = Depends(get_db)):
     user = (
-        db.query(User).filter(User.id == user_uuid).first()
+        db.query(User).filter(User.id == user_id).first()
     )
     if not user:
         raise HTTPException(status_code=404, detail="User id no encontrado.")
@@ -116,40 +108,32 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/")
-async def get_users(
-    user_type: Optional[int] = Query(default=None, ge=1, le=2),
-    db: Session = Depends(get_db),
-):
-    db_users = db.query(User)
+async def get_users(user_type: Optional[int] = Query(default=None, ge=1, le=2), db: Session = Depends(get_db)):
+    query = db.query(User)
 
     if user_type is not None:
         selected_role = _get_role_string(user_type)
-        filtered = db_users.filter(User.role == selected_role)
+        query = query.filter(User.role == selected_role)
 
-    users = filtered.all()
+    users = query.all()
 
     return {"msg": "", "data": users}
 
 
 @router.patch("/{user_id}")
-async def update_user(updated_user: UserUpdate, user_id: str, db: Session = Depends(get_db)):
-    try:
-        user_uuid = UUID(user_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="User id invalido.")
-
-    user = db.query(User).filter(User.id == user_uuid).first()
+async def update_user(updated_user: UserUpdate, user_id: UUID, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User id no encontrado.")
 
     if updated_user.full_name is not None:
-        user.full_name = updated_user.full_name
+        user.full_name = updated_user.full_name # type: ignore
     if updated_user.email is not None:
-        user.email = updated_user.email.strip().lower()
+        user.email = updated_user.email.strip().lower() # type: ignore
     if updated_user.password is not None:
-        user.password_hash = get_password_hash(updated_user.password)
+        user.password_hash = get_password_hash(updated_user.password) # type: ignore
     if updated_user.type is not None:
-        user.role = _get_role_string(updated_user.type)
+        user.role = _get_role_string(updated_user.type) # type: ignore
 
     db.commit()
     db.refresh(user)
@@ -166,13 +150,8 @@ async def update_user(updated_user: UserUpdate, user_id: str, db: Session = Depe
 
 
 @router.delete("/{user_id}")
-async def delete_user(user_id: str, db: Session = Depends(get_db)):
-    try:
-        user_uuid = UUID(user_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="User id invalido")
-
-    user = db.query(User).filter(User.id == user_uuid).first()
+async def delete_user(user_id: UUID, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User id no encontrado.")
 
@@ -181,6 +160,7 @@ async def delete_user(user_id: str, db: Session = Depends(get_db)):
     return {"msg": "User borrado correctamente."}
 
 
+# AUDITORIA DE USUARIO
 @router.get("/auditoria/{user_id}")
 async def get_logs_user(user_id: str, db: Session = Depends(get_db)):
     try:
