@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 
 
 from .database import get_db, session
-from .models import Acceso, Estado, Navegador, SistemaOperativo, Usuario
+from .models import AccessEventType as Estado, AccessLog as Acceso, Navegador, SistemaOperativo, User as Usuario
 from .routers import admin, resetPass
 from .security import DUMMY_HASH, get_password_hash, is_password_hashed, verify_password
 
@@ -41,7 +41,7 @@ def migrate_plain_passwords_to_hash():
     # BLOQUE SEGURIDAD: migra passwords en texto plano a hash Argon2.
     db = session()
     try:
-        users = db.query(Usuario).filter(Usuario.contra_hash.isnot(None)).all()
+        users = db.query(Usuario).filter(Usuario.password_hash.isnot(None)).all()
         changed = 0
         for user in users:
             if user.contra_hash and not is_password_hashed(user.contra_hash):

@@ -2,11 +2,11 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.models import Acceso, Estado, Rol, Usuario
+from app.models import User, AccessLog, AccessEventType, UserToken
 from app.security import get_password_hash
 
 router = APIRouter(
@@ -16,65 +16,65 @@ router = APIRouter(
 
 
 class UserCreate(BaseModel):
-    name: str
-    email: str
+    full_name: str
+    email: EmailStr
     password: str
     type: int = Field(..., ge=1, le=2)
 
 
 class UserUpdate(BaseModel):
-    name: Optional[str] = None
-    email: Optional[str] = None
+    full_name: Optional[str] = Field(None)
+    email: Optional[EmailStr] = None
     password: Optional[str] = None
     type: Optional[int] = Field(None, ge=1, le=2)
 
 
-def _role_name_by_type(user_type: int):
+def _get_role_string(user_type: int):
     return "admin" if user_type == 2 else "user"
 
+async def verify_admin_token(x_token : str = Header(...), db: Session = Depends(get_db)):
+    db_query = db.query(UserToken).filter(UserToken.token_id == x_token)
+    db_token = db_query.first()
 
-def _role_label(role_name: str | None):
-    return "Administrador" if (role_name or "").lower() == "admin" else "Usuario"
-
-
-def _user_type_by_role(role_name: str | None):
-    return 2 if (role_name or "").lower() == "admin" else 1
-
-async def verify_token(x_token : str = Header(...), db: Session = Depends(get_db)):
-    db_query = db.query(user_token).filter(user_token.token_id == x_token)
-    db_acceso = db_query.first()
-    if  not db_acceso:
+    if  not db_token:
         raise HTTPException(
             status_code=403,
             detail={
                 "msg": "Token incorrecto."
             }
         )
-    if db_acceso.revoked_at is not None:
+    
+    if db_token.revoked_at is not None:
         raise HTTPException(
             status_code=403,
             detail={
-                "msg": "Token vencido.."
+                "msg": "Token vencido."
             }
         )
+
+    if db_token.user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "msg": "Acceso denegado: Se requiere rol Admin."
+            }
+        )    
     
-    return x_token
+    return db_token.user
 
 
 @router.put("/")
 async def add_user(user: UserCreate, db: Session = Depends(get_db)):
-    existing = db.query(Usuario).filter(Usuario.email == user.email.strip().lower()).first()
+    existing = db.query(User).filter(User.email == user.email.strip().lower()).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email ya registrado")
 
-    role_name = _role_name_by_type(user.type)
-
-    db_user = Usuario(
+    db_user = User(
         id=uuid4(),
-        name=user.name,
-        email=user.email.strip(),
-        contra_hash=get_password_hash(user.password),
-        rol_id=user.type,
+        full_name=user.full_name,
+        email=user.email.strip().lower(),
+        password_hash=get_password_hash(user.password),
+        role=_get_role_string(user.type),
     )
     db.add(db_user)
     db.commit()
@@ -84,9 +84,9 @@ async def add_user(user: UserCreate, db: Session = Depends(get_db)):
         "msg": "Usuario creado correctamente.",
         "user": {
             "id": str(db_user.id),
-            "name": db_user.name,
+            "name": db_user.full_name,
             "email": db_user.email,
-            "role": role_name,
+            "role": db_user.role,
         }
     }
 
@@ -99,10 +99,7 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="User id invalido")
 
     user = (
-        db.query(Usuario)
-        .options(joinedload(Usuario.rol))
-        .filter(Usuario.id == user_uuid)
-        .first()
+        db.query(User).filter(User.id == user_uuid).first()
     )
     if not user:
         raise HTTPException(status_code=404, detail="User id no encontrado.")
@@ -111,9 +108,9 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
         "msg": "",
         "data": {
             "id": str(user.id),
-            "name": user.name,
+            "name": user.full_name,
             "email": user.email,
-            "role": _user_type_by_role(user.rol.nombre if user.rol else None),
+            "role": user.role
         }
     }
 
@@ -123,40 +120,15 @@ async def get_users(
     user_type: Optional[int] = Query(default=None, ge=1, le=2),
     db: Session = Depends(get_db),
 ):
-    users = db.query(Usuario).options(joinedload(Usuario.rol)).all()
+    db_users = db.query(User)
 
-    data = []
-    for user in users:
-        role_name = user.rol.nombre if user.rol else "user"
-        role_label = _role_label(role_name)
-        current_type = _user_type_by_role(role_name)
+    if user_type is not None:
+        selected_role = _get_role_string(user_type)
+        filtered = db_users.filter(User.role == selected_role)
 
-        if user_type is not None and current_type != user_type:
-            continue
+    users = filtered.all()
 
-        latest_access = (
-            db.query(Acceso)
-            .join(Estado, Acceso.estado_id == Estado.id)
-            .filter(
-                Acceso.usuario_id == user.id,
-                Estado.nombre == "LOGIN_SUCCESS",
-            )
-            .order_by(Acceso.fecha.desc())
-            .first()
-        )
-
-        last_access = latest_access.fecha.strftime("%d/%m/%Y") if latest_access and latest_access.fecha else "-"
-
-        data.append({
-            "id": str(user.id),
-            "nombre": user.name,
-            "email": user.email,
-            "rol": role_label,
-            "ultimoAcceso": last_access,
-            "type": current_type,
-        })
-
-    return {"msg": "", "data": data}
+    return {"msg": "", "data": users}
 
 
 @router.patch("/{user_id}")
@@ -164,26 +136,20 @@ async def update_user(updated_user: UserUpdate, user_id: str, db: Session = Depe
     try:
         user_uuid = UUID(user_id)
     except ValueError:
-        raise HTTPException(status_code=400, detail="User id invalido")
+        raise HTTPException(status_code=400, detail="User id invalido.")
 
-    user = db.query(Usuario).options(joinedload(Usuario.rol)).filter(Usuario.id == user_uuid).first()
+    user = db.query(User).filter(User.id == user_uuid).first()
     if not user:
         raise HTTPException(status_code=404, detail="User id no encontrado.")
 
-    if updated_user.name is not None:
-        user.name = updated_user.name
+    if updated_user.full_name is not None:
+        user.full_name = updated_user.full_name
     if updated_user.email is not None:
         user.email = updated_user.email.strip().lower()
     if updated_user.password is not None:
-        user.contra_hash = get_password_hash(updated_user.password)
+        user.password_hash = get_password_hash(updated_user.password)
     if updated_user.type is not None:
-        role_name = _role_name_by_type(updated_user.type)
-        role = db.query(Rol).filter(Rol.nombre == role_name).first()
-        if not role:
-            role = Rol(id=uuid4(), nombre=role_name)
-            db.add(role)
-            db.flush()
-        user.rol_id = role.id
+        user.role = _get_role_string(updated_user.type)
 
     db.commit()
     db.refresh(user)
@@ -192,9 +158,9 @@ async def update_user(updated_user: UserUpdate, user_id: str, db: Session = Depe
         "msg": "Usuario actualizado",
         "data": {
             "id": str(user.id),
-            "name": user.name,
+            "name": user.full_name,
             "email": user.email,
-            "type": _user_type_by_role(user.rol.nombre if user.rol else None),
+            "type": user.role,
         }
     }
 
@@ -206,7 +172,7 @@ async def delete_user(user_id: str, db: Session = Depends(get_db)):
     except ValueError:
         raise HTTPException(status_code=400, detail="User id invalido")
 
-    user = db.query(Usuario).filter(Usuario.id == user_uuid).first()
+    user = db.query(User).filter(User.id == user_uuid).first()
     if not user:
         raise HTTPException(status_code=404, detail="User id no encontrado.")
 
@@ -222,41 +188,33 @@ async def get_logs_user(user_id: str, db: Session = Depends(get_db)):
     except ValueError:
         raise HTTPException(status_code=400, detail="User id invalido")
 
-    user = db.query(Usuario).options(joinedload(Usuario.rol)).filter(Usuario.id == user_uuid).first()
+    user = db.query(User).filter(User.id == user_uuid).first()
     if not user:
         raise HTTPException(status_code=404, detail="User id no encontrado.")
 
     logs_db = (
-        db.query(Acceso)
-        .options(
-            joinedload(Acceso.estado),
-            joinedload(Acceso.navegador),
-            joinedload(Acceso.sistema_operativo),
-        )
-        .filter(Acceso.usuario_id == user_uuid)
-        .order_by(Acceso.fecha.desc())
+        db.query(AccessLog)
+        .filter(AccessLog.user_id == user_uuid)
+        .order_by(AccessLog.timestamp.desc())
         .all()
     )
 
     logs = []
     for access in logs_db:
         logs.append({
-            "navegador": access.navegador.nombre if access.navegador else "Desconocido",
-            "sistema_operativo": access.sistema_operativo.nombre if access.sistema_operativo else "Desconocido",
-            "ip": access.ip or "-",
-            "fecha": access.fecha.strftime("%d/%m/%Y") if access.fecha else "-",
-            "hora": access.fecha.strftime("%H:%M") if access.fecha else "-",
-            "accion": (access.estado.nombre if access.estado else "DESCONOCIDA").upper(),
+            "ip": access.ip_address or "-",
+            "fecha": access.timestamp.strftime("%d/%m/%Y") if access.timestamp else "-",
+            "hora": access.timestamp.strftime("%H:%M") if access.timestamp else "-",
+            "accion": (access.event_type if access.event_type else "DESCONOCIDA").upper(),
         })
 
-    role_label = _role_label(user.rol.nombre if user.rol else None)
     return {
         "msg": "",
         "user": {
             "id": str(user.id),
-            "nombre": user.name,
+            "nombre": user.full_name,
             "email": user.email,
-            "rol": role_label,
+            "rol": user.role,
         },
         "data": logs,
     }

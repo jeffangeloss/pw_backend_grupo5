@@ -31,7 +31,7 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     role = Column(String(20), server_default='user')
     
-    token_pass = Column(String(255), unique=True, nullable=False)
+    token_pass = Column(String(255), unique=True) ##,nullable=False)
     token_pass_expires = Column(DateTime, nullable=True)
     
     verification_token = Column(String(255), unique=True, nullable=True)
