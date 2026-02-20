@@ -5,7 +5,7 @@ class LoginRequest(BaseModel):
     correo: str
     password: str
 
-## USUARIO
+## USUARIO DEL LADO DEL ADMIN
 class User(BaseModel):
     id: str
     name: str
