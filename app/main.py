@@ -44,8 +44,8 @@ def migrate_plain_passwords_to_hash():
         users = db.query(Usuario).filter(Usuario.password_hash.isnot(None)).all()
         changed = 0
         for user in users:
-            if user.contra_hash and not is_password_hashed(user.contra_hash):
-                user.contra_hash = get_password_hash(user.contra_hash)
+            if user.password_hash and not is_password_hashed(user.password_hash):
+                user.password_hash = get_password_hash(user.password_hash)
                 changed += 1
 
         if changed:

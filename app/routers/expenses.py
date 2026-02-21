@@ -82,3 +82,30 @@ async def update_expense(
     }
 
 ## endpoint DELETE (REQ 15)
+
+@router.delete("/{expense_id}")
+async def delete_expense(
+    expense_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    expense = (
+        db.query(Expense).filter(
+            Expense.id == expense_id,
+            Expense.user_id == current_user.id
+        ).first()
+    )
+    
+    if not expense:
+        raise HTTPException(
+            status_code=404,
+            detail="Egreso no encontrado"
+        )
+    
+    db.delete(expense)
+    db.commit()
+    
+    return {
+        "msg" : "Egreso eliminado",
+        "expense_id" : expense_id
+    }    
