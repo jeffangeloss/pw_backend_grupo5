@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from .database import get_db, session
 from .models import AccessEventType as Estado, AccessLog as Acceso, Navegador, SistemaOperativo, User as Usuario
-from .routers import admin, resetPass
+from .routers import admin, resetPass, expenses
 from .security import DUMMY_HASH, get_password_hash, is_password_hashed, verify_password
 
 
@@ -449,3 +449,4 @@ async def read_me(current_user: Usuario = Depends(get_current_user)):
 
 app.include_router(admin.router)
 app.include_router(resetPass.router)
+#TODO: app.include_router(expenses.router) #Arreglar import circular
