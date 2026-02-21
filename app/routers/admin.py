@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
-from app.models import User, AccessLog, AccessEventType, UserToken
+from app.models import User, AccessLog, UserToken
 from app.security import get_password_hash
 
 
@@ -40,8 +40,8 @@ async def verify_admin_token(x_token : str = Header(...), db: Session = Depends(
 
 router = APIRouter(
     prefix="/admin",
-    tags=["Admin"],
-    dependencies=[Depends(verify_admin_token)]
+    tags=["Admin"]
+    #dependencies=[Depends(verify_admin_token)]
 )
 
 class UserCreate(BaseModel):
