@@ -3,9 +3,12 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func
+
 from app.database import get_db
 from app.models import User, AccessLog, AccessEventType, UserToken
 from app.security import get_password_hash
+from app.main import get_current_user
 
 
 async def verify_admin_token(x_token : str = Header(...), db: Session = Depends(get_db)):
@@ -197,4 +200,36 @@ async def get_logs_user(user_id: str, db: Session = Depends(get_db)):
             "rol": user.role,
         },
         "data": logs,
+    }
+
+# ESTADISTICAS DE USUARIOS
+@router.get("/userStats")
+async def get_user_stats(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)  
+):
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="No autorizado"
+        )
+    
+    total_users = db.query(func.count(User.id)).scalar()
+    
+    users_by_month = (
+        db.query(
+            func.to_char(func.date_trunc("month", User.created_at), "YYYY-MM").label("month"),
+            func.count(User.id).label("count")
+        )
+        .group_by("month")
+        .order_by("month")
+        .all()
+    )
+    
+    return {
+        "total_users" : total_users,
+        "users_by_month" : [
+            {"month": row.month, "count": row.count}
+            for row in users_by_month
+        ]
     }
