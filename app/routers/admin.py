@@ -10,6 +10,16 @@ from app.database import get_db
 from app.models import AccessEventType, AccessLog, User, UserRole
 from app.security import decode_access_token, get_password_hash
 
+ENV = os.getenv("ENV", "dev").strip().lower()
+ADMIN_TOKEN_GUARD_ENABLED = os.getenv("ADMIN_TOKEN_GUARD_ENABLED", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
+if ENV in {"prod", "production"} and not ADMIN_TOKEN_GUARD_ENABLED:
+    raise RuntimeError("ADMIN_TOKEN_GUARD_ENABLED debe estar en true en producción.")
+
 
 class UserCreate(BaseModel):
     name: str
@@ -42,29 +52,23 @@ async def verify_admin_token(x_token: str = Header(...), db: Session = Depends(g
     try:
         payload = decode_access_token(x_token)
     except Exception as exc:
-        raise HTTPException(status_code=403, detail={"msg": "Token incorrecto."}) from exc
+        raise HTTPException(status_code=403, detail={"msg": "Token incorrecto"}) from exc
 
     email = (payload.get("sub") or "").strip().lower()
     if not email:
-        raise HTTPException(status_code=403, detail={"msg": "Token incorrecto."})
+        raise HTTPException(status_code=403, detail={"msg": "Token incorrecto"})
 
     user = db.query(User).filter(User.email == email).first()
     if not user:
-        raise HTTPException(status_code=403, detail={"msg": "Token incorrecto."})
+        raise HTTPException(status_code=403, detail={"msg": "Token incorrecto"})
 
     if user.role != UserRole.admin:
         raise HTTPException(
             status_code=403,
-            detail={"msg": "Acceso denegado: Se requiere rol Admin."},
+            detail={"msg": "Acceso denegado: se requiere rol Admin"},
         )
     return user
 
-
-ADMIN_TOKEN_GUARD_ENABLED = os.getenv("ADMIN_TOKEN_GUARD_ENABLED", "false").lower() in {
-    "1",
-    "true",
-    "yes",
-}
 
 router = APIRouter(
     prefix="/users",
@@ -73,12 +77,12 @@ router = APIRouter(
 )
 
 
-@router.put("/")
+@router.post("/", status_code=201)
 async def add_user(user: UserCreate, db: Session = Depends(get_db)):
     email = user.email.strip().lower()
     existing = db.query(User).filter(User.email == email).first()
     if existing:
-        raise HTTPException(status_code=400, detail="Email ya registrado")
+        raise HTTPException(status_code=400, detail={"msg": "Email ya registrado"})
 
     db_user = User(
         id=uuid4(),
@@ -107,11 +111,11 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
     try:
         user_uuid = UUID(user_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="User id invalido") from exc
+        raise HTTPException(status_code=400, detail={"msg": "User id invalido"}) from exc
 
     user = db.query(User).filter(User.id == user_uuid).first()
     if not user:
-        raise HTTPException(status_code=404, detail="User id no encontrado.")
+        raise HTTPException(status_code=404, detail={"msg": "User id no encontrado"})
 
     return {
         "msg": "",
@@ -167,16 +171,27 @@ async def update_user(updated_user: UserUpdate, user_id: str, db: Session = Depe
     try:
         user_uuid = UUID(user_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="User id invalido") from exc
+        raise HTTPException(status_code=400, detail={"msg": "User id invalido"}) from exc
 
     user = db.query(User).filter(User.id == user_uuid).first()
     if not user:
-        raise HTTPException(status_code=404, detail="User id no encontrado.")
+        raise HTTPException(status_code=404, detail={"msg": "User id no encontrado"})
 
     if updated_user.name is not None:
         user.full_name = updated_user.name.strip()
     if updated_user.email is not None:
-        user.email = updated_user.email.strip().lower()
+        new_email = updated_user.email.strip().lower()
+        existing = (
+            db.query(User)
+            .filter(
+                User.email == new_email,
+                User.id != user_uuid,
+            )
+            .first()
+        )
+        if existing:
+            raise HTTPException(status_code=400, detail={"msg": "Email ya registrado"})
+        user.email = new_email
     if updated_user.password is not None:
         user.password_hash = get_password_hash(updated_user.password)
     if updated_user.type is not None:
@@ -201,11 +216,11 @@ async def delete_user(user_id: str, db: Session = Depends(get_db)):
     try:
         user_uuid = UUID(user_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="User id invalido") from exc
+        raise HTTPException(status_code=400, detail={"msg": "User id invalido"}) from exc
 
     user = db.query(User).filter(User.id == user_uuid).first()
     if not user:
-        raise HTTPException(status_code=404, detail="User id no encontrado.")
+        raise HTTPException(status_code=404, detail={"msg": "User id no encontrado"})
 
     db.delete(user)
     db.commit()
@@ -217,11 +232,11 @@ async def get_logs_user(user_id: str, db: Session = Depends(get_db)):
     try:
         user_uuid = UUID(user_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="User id invalido") from exc
+        raise HTTPException(status_code=400, detail={"msg": "User id invalido"}) from exc
 
     user = db.query(User).filter(User.id == user_uuid).first()
     if not user:
-        raise HTTPException(status_code=404, detail="User id no encontrado.")
+        raise HTTPException(status_code=404, detail={"msg": "User id no encontrado"})
 
     logs_db = (
         db.query(AccessLog)
