@@ -25,5 +25,6 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
     type: Optional[int] = Field(None, ge = 1, le = 2)
 
-class ResetRequest(BaseModel):
-    email: str
+class ResetForm(BaseModel):
+    token : str
+    password : str
