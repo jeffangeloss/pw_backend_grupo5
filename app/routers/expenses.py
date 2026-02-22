@@ -7,7 +7,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Expense, User
+from ..models import Category, Expense, User
 from ..security import decode_access_token
 
 router = APIRouter(
@@ -44,11 +44,32 @@ def _serialize_expense(expense: Expense):
         "id": str(expense.id),
         "user_id": str(expense.user_id),
         "category_id": str(expense.category_id),
+        "category_name": expense.category.name if expense.category else None,
         "amount": float(expense.amount),
         "expense_date": expense.expense_date.isoformat(),
         "description": expense.description,
         "created_at": expense.created_at.isoformat() if expense.created_at else None,
         "updated_at": expense.updated_at.isoformat() if expense.updated_at else None,
+    }
+
+
+@router.get("/categories")
+async def get_categories(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    categories = (
+        db.query(Category.id, Category.name)
+        .join(Expense, Expense.category_id == Category.id)
+        .filter(Expense.user_id == current_user.id)
+        .distinct()
+        .order_by(Category.name.asc())
+        .all()
+    )
+
+    return {
+        "msg": "",
+        "data": [{"id": str(category.id), "name": category.name} for category in categories],
     }
 
 
@@ -58,6 +79,8 @@ async def get_expenses(
     category_id: Optional[UUID] = Query(default=None),
     date_from: Optional[datetime] = Query(default=None),
     date_to: Optional[datetime] = Query(default=None),
+    amount_min: Optional[float] = Query(default=None, ge=0),
+    amount_max: Optional[float] = Query(default=None, ge=0),
     db: Session = Depends(get_db),
 ):
     query = db.query(Expense).filter(Expense.user_id == current_user.id)
@@ -68,6 +91,10 @@ async def get_expenses(
         query = query.filter(Expense.expense_date >= date_from)
     if date_to:
         query = query.filter(Expense.expense_date <= date_to)
+    if amount_min is not None:
+        query = query.filter(Expense.amount >= amount_min)
+    if amount_max is not None:
+        query = query.filter(Expense.amount <= amount_max)
 
     expenses_list = query.order_by(Expense.expense_date.desc()).all()
     return {

@@ -4,12 +4,12 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .database import get_db, session
-from .models import AccessEventType, AccessLog, User
+from .models import AccessEventType, AccessLog, User, UserRole
 from .routers import admin, expenses
 from .security import (
     DUMMY_HASH,
@@ -132,11 +132,56 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=8)
 
 
+class RegisterRequest(BaseModel):
+    full_name: str = Field(..., min_length=1, max_length=300)
+    email: EmailStr
+    password: str = Field(..., min_length=8)
+
+
 class LogoutRequest(BaseModel):
     token: str = Field(..., min_length=8)
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=8)
+    new_password: str = Field(..., min_length=8)
+
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+
+@app.post("/register", status_code=201)
+async def register(register_request: RegisterRequest, db: Session = Depends(get_db)):
+    email = register_request.email.strip().lower()
+    full_name = register_request.full_name.strip()
+
+    if not full_name:
+        raise HTTPException(status_code=400, detail="Nombre completo requerido")
+
+    existing = db.query(User).filter(User.email == email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email ya registrado")
+
+    user = User(
+        full_name=full_name,
+        email=email,
+        password_hash=get_password_hash(register_request.password),
+        role=UserRole.user,
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "msg": "Cuenta creada",
+        "user": {
+            "id": str(user.id),
+            "name": user.full_name,
+            "email": user.email,
+            "rol": user.role.value,
+        },
+    }
 
 
 @app.post("/login")
@@ -242,6 +287,39 @@ async def read_me(current_user: User = Depends(get_current_user)):
         "name": current_user.full_name,
         "rol": current_user.role.value if current_user.role else "user",
     }
+
+
+@app.patch("/me/password")
+async def change_my_password(
+    payload: ChangePasswordRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if payload.current_password == payload.new_password:
+        raise HTTPException(
+            status_code=400,
+            detail="La nueva contraseña debe ser diferente a la actual",
+        )
+
+    if is_password_hashed(current_user.password_hash):
+        password_ok = verify_password(payload.current_password, current_user.password_hash)
+    else:
+        password_ok = current_user.password_hash == payload.current_password
+
+    if not password_ok:
+        raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta")
+
+    current_user.password_hash = get_password_hash(payload.new_password)
+    _create_access_log(
+        db,
+        user=current_user,
+        event_type=AccessEventType.PASSWORD_RESET_SUCCESS,
+        attempt_email=current_user.email,
+        request=request,
+    )
+    db.commit()
+    return {"msg": "Contraseña actualizada"}
 
 
 app.include_router(admin.router)
