@@ -51,6 +51,40 @@ def _extract_client_ip(request: Request):
     return "0.0.0.0"
 
 
+def _extract_browser_from_sec_ch_ua(sec_ch_ua: str | None):
+    raw = (sec_ch_ua or "").lower()
+    if not raw:
+        return None
+    if "brave" in raw:
+        return "Brave"
+    if "edg" in raw or "edge" in raw:
+        return "Edge"
+    if "opr" in raw or "opera" in raw:
+        return "Opera"
+    if "firefox" in raw:
+        return "Firefox"
+    if "safari" in raw and "chrom" not in raw:
+        return "Safari"
+    if "chrom" in raw:
+        return "Chrome"
+    return None
+
+
+def _extract_web_agent(request: Request):
+    explicit_browser = (request.headers.get("x-browser-name") or "").strip()
+    if explicit_browser:
+        return explicit_browser[:255]
+
+    browser_from_hint = _extract_browser_from_sec_ch_ua(request.headers.get("sec-ch-ua"))
+    if browser_from_hint:
+        return browser_from_hint
+
+    user_agent = (request.headers.get("user-agent") or "").strip()
+    if user_agent:
+        return user_agent[:255]
+    return "Desconocido"
+
+
 def _create_access_log(
     db: Session,
     *,
@@ -64,7 +98,7 @@ def _create_access_log(
         event_type=event_type,
         attempt_email=attempt_email,
         ip_address=_extract_client_ip(request),
-        web_agent=request.headers.get("user-agent"),
+        web_agent=_extract_web_agent(request),
     )
     db.add(log)
 
