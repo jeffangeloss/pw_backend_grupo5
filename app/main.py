@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from .database import get_db, session
 from .models import AccessEventType, AccessLog, User
-from .routers import admin, expenses, resetPass
+from .routers import admin, expenses
 from .security import (
     DUMMY_HASH,
     create_access_token,
@@ -246,4 +246,3 @@ async def read_me(current_user: User = Depends(get_current_user)):
 
 app.include_router(admin.router)
 app.include_router(expenses.router)
-app.include_router(resetPass.router)
