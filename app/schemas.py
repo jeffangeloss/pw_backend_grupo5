@@ -30,10 +30,8 @@ class UserUpdate(BaseModel):
     type: Optional[int] = Field(None, ge=1, le=2)
 
 
-class ResetRequest(BaseModel):
-    email: EmailStr
 
-
-class ResetConfirmRequest(BaseModel):
+class ResetForm(BaseModel):
     token: str = Field(..., min_length=10)
     password: str = Field(..., min_length=8)
+

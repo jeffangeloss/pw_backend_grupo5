@@ -112,6 +112,8 @@ async def get_expenses(
     category_id: Optional[UUID] = Query(default=None),
     date_from: Optional[datetime] = Query(default=None),
     date_to: Optional[datetime] = Query(default=None),
+    amount_min: Optional[float] = Query(default=None, ge=0),
+    amount_max: Optional[float] = Query(default=None, ge=0),
     db: Session = Depends(get_db),
 ):
     query = (
@@ -126,6 +128,10 @@ async def get_expenses(
         query = query.filter(Expense.expense_date >= date_from)
     if date_to:
         query = query.filter(Expense.expense_date <= date_to)
+    if amount_min is not None:
+        query = query.filter(Expense.amount >= amount_min)
+    if amount_max is not None:
+        query = query.filter(Expense.amount <= amount_max)
 
     expenses_list = query.order_by(Expense.expense_date.desc()).all()
     return {
