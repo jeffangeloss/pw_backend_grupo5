@@ -1,149 +1,192 @@
-from sqlalchemy import TIMESTAMP, UUID, Column, DateTime, Numeric, Integer, Boolean, String, ForeignKey, Text, text
-from .database import Base
-from sqlalchemy.orm import relationship
+import enum
 import uuid
 
-# Según diagrama de Miro
+from sqlalchemy import (
+    UUID,
+    Boolean,
+    Column,
+    DateTime,
+    Enum,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
+from sqlalchemy.orm import relationship
 
-class Category(Base):
-    __tablename__ = "category"
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=lambda: str(uuid.uuid4()),
-        index=True
-    )
-    name = Column(String(255), unique=True, nullable=False)
-    created_at = Column(TIMESTAMP, server_default=text('CURRENT_TIMESTAMP'))
-    
-    expenses = relationship("Expense", back_populates="category")
+from .database import Base
+
+
+class UserRole(str, enum.Enum):
+    user = "user"
+    admin = "admin"
+
+
+class TokenStatus(str, enum.Enum):
+    ACTIVE = "ACTIVE"
+    REVOKED = "REVOKED"
+
+
+class AccessEventType(str, enum.Enum):
+    LOGIN_SUCCESS = "LOGIN_SUCCESS"
+    LOGIN_FAIL = "LOGIN_FAIL"
+    LOGOUT = "LOGOUT"
+    PASSWORD_RESET_REQUEST = "PASSWORD_RESET_REQUEST"
+    PASSWORD_RESET_SUCCESS = "PASSWORD_RESET_SUCCESS"
+    EMAIL_VERIFY_SENT = "EMAIL_VERIFY_SENT"
+    EMAIL_VERIFY_SUCCESS = "EMAIL_VERIFY_SUCCESS"
+    ACCOUNT_DISABLED = "ACCOUNT_DISABLED"
+    ACCOUNT_ENABLED = "ACCOUNT_ENABLED"
+    PIN_2FA_SUCCESS = "PIN_2FA_SUCCESS"
+    PIN_2FA_FAIL = "PIN_2FA_FAIL"
+
 
 class User(Base):
     __tablename__ = "user"
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=lambda: str(uuid.uuid4()),
-        index=True
-    )
-    full_name = Column(String(255), nullable=False)
-    email = Column(String(255), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=False)
-    role = Column(String(20), server_default='user')
-    
-    token_pass = Column(String(255), unique=True) ##,nullable=False)
-    token_pass_expires = Column(DateTime, nullable=True)
-    
-    verification_token = Column(String(255), unique=True, nullable=True)
-    verification_token_expires = Column(DateTime, nullable=True)
-    email_verified = Column(Boolean, default=False)
-    
-    recovery_token = Column(String(255), unique=True, nullable=True)
-    recovery_token_expires = Column(DateTime, nullable=True)
-    
-    is_active = Column(Boolean, nullable=False, default=False)
-    created_at = Column(TIMESTAMP, server_default=text('CURRENT_TIMESTAMP'))
-    updated_at = Column(TIMESTAMP, server_default=text('CURRENT_TIMESTAMP'))
 
-    expenses = relationship("Expense", back_populates="user")
-    access_logs = relationship("AccessLog", back_populates="user")
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    full_name = Column(String(300), nullable=False)
+    email = Column(String(100), nullable=False, unique=True)
+    password_hash = Column(String(300), nullable=False)
+
+    role = Column(
+        Enum(UserRole, name="user_role"),
+        nullable=False,
+        default=UserRole.user,
+        server_default=text("'user'"),
+    )
+
+    token_pass = Column(String(255), unique=True, nullable=True)
+    token_pass_expires = Column(DateTime, nullable=True)
+    token_verification = Column(String(255), unique=True, nullable=True)
+    token_verification_expires = Column(DateTime, nullable=True)
+
+    email_verified = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    is_active = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+
+    created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+    updated_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+
+    categories = relationship("Category", back_populates="user")
+    expenses = relationship(
+    "Expense",
+    back_populates="user",
+    overlaps="category,expenses",)
     user_tokens = relationship("UserToken", back_populates="user")
+    access_logs = relationship("AccessLog", back_populates="user")
+
+
+class Category(Base):
+    __tablename__ = "category"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_category_user_name"),
+        UniqueConstraint("id", "user_id", name="uq_category_id_user_id"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
+
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+
+    user = relationship("User", back_populates="categories")
+    expenses = relationship(
+    "Expense",
+    back_populates="category",
+    overlaps="user,expenses",)
+
 
 class Expense(Base):
     __tablename__ = "expense"
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=lambda: str(uuid.uuid4()),
-        index=True
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["category_id", "user_id"],
+            ["category.id", "category.user_id"],
+            name="fk_expense_category_user",
+        ),
     )
-    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False, index=True)
-    category_id = Column(UUID(as_uuid=True), ForeignKey("category.id"), nullable=False)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
+    category_id = Column(UUID(as_uuid=True), nullable=False)
+
     amount = Column(Numeric(15, 2), nullable=False)
     expense_date = Column(DateTime, nullable=False)
-    description = Column(Text, nullable=True)
-    created_at = Column(TIMESTAMP, server_default=text('CURRENT_TIMESTAMP'))
-    updated_at = Column(TIMESTAMP)
+    description = Column(Text, nullable=False)
 
-    user = relationship("User", back_populates="expenses")
-    category = relationship("Category", back_populates="expenses")
+    created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+    updated_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
 
-class AccessEventType(Base):
-    __tablename__ = "access_event_type"
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=lambda: str(uuid.uuid4()),
-        index=True
+    user = relationship(
+    "User",
+        back_populates="expenses",
+        foreign_keys=[user_id],
+        overlaps="category,expenses",
     )
-    name = Column(String(50), unique=True, nullable=False)
-    logs = relationship("AccessLog", back_populates="event_type")
-
-class AccessLog(Base):
-    __tablename__ = "access_log"
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=lambda: str(uuid.uuid4()),
-        index=True
+    category = relationship(
+        "Category",
+        back_populates="expenses",
+        foreign_keys=[category_id, user_id],
+        overlaps="user,expenses",
     )
-    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=True, index=True)
-    event_id = Column(UUID(as_uuid=True), ForeignKey("access_event_type.id"), nullable=False)
-    ip_address = Column(String(45), nullable=True)
-    web_agent = Column(String(255))
-    created_at = Column(TIMESTAMP, server_default=text('CURRENT_TIMESTAMP'))
 
-    user = relationship("User", back_populates="access_logs")
-    event_type = relationship("AccessEventType", back_populates="logs")
-
-class UserToken(Base):
-    __tablename__ = "user_token"
-    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), primary_key=True)
-    token_id = Column(UUID(as_uuid=True), ForeignKey("token_device.id"), primary_key=True, unique=True)
-    
-    assigned_at = Column(TIMESTAMP, server_default=text('CURRENT_TIMESTAMP'))
-    revoked_at = Column(TIMESTAMP, nullable=True)
-
-    user = relationship("User", back_populates="user_tokens")
-    device = relationship("TokenDevice", back_populates="user_links")
 
 class TokenDevice(Base):
     __tablename__ = "token_device"
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=lambda: str(uuid.uuid4()),
-        index=True
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    serial = Column(String(80), nullable=False, unique=True)
+    secret_enc = Column(String(255), nullable=False)
+
+    digits = Column(Integer, nullable=False, default=4, server_default=text("4"))
+    period = Column(Integer, nullable=False, default=30, server_default=text("30"))
+    status = Column(
+        Enum(TokenStatus, name="token_status"),
+        nullable=False,
+        default=TokenStatus.ACTIVE,
+        server_default=text("'ACTIVE'"),
     )
-    serial = Column(String(80), unique=True, nullable=False)
-    secret_enc = Column(String(255), nullable=False, comment="Semilla Base32 para TOTP")
-    digits = Column(Integer, nullable=False, default=4)
-    period = Column(Integer, nullable=False, default=30)
-    status = Column(String(20), nullable=False, default='ACTIVE')
-    created_at = Column(TIMESTAMP, server_default=text('CURRENT_TIMESTAMP'))
-    last_seen_at = Column(TIMESTAMP, nullable=True)
 
-    user_links = relationship("UserToken", back_populates="device")
+    created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+    last_seen_at = Column(DateTime, nullable=True)
 
-# TABLAS LEGACY
-class Navegador(Base):
-    __tablename__ = "navegador"
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=lambda: str(uuid.uuid4()),
-        index=True
-    )
-    nombre = Column(String)
+    user_tokens = relationship("UserToken", back_populates="token")
 
-# BLOQUE AUDITORIA: catalogo de sistemas operativos.
-class SistemaOperativo(Base):
-    __tablename__ = "sistema_operativo"
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=lambda: str(uuid.uuid4()),
-        index=True
-    )
-    nombre = Column(String, unique=True)
 
+class UserToken(Base):
+    __tablename__ = "user_token"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), primary_key=True)
+    token_id = Column(UUID(as_uuid=True), ForeignKey("token_device.id"), primary_key=True)
+
+    assigned_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+    revoked_at = Column(DateTime, nullable=True)
+
+    user = relationship("User", back_populates="user_tokens")
+    token = relationship("TokenDevice", back_populates="user_tokens")
+
+
+class AccessLog(Base):
+    __tablename__ = "access_log"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=True)
+    event_type = Column(Enum(AccessEventType, name="access_event_type"), nullable=False)
+
+    attempt_email = Column(String(100), nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+
+    ip_address = Column(String(45), nullable=True)
+    web_agent = Column(String(255), nullable=True)
+
+    user = relationship("User", back_populates="access_logs")
