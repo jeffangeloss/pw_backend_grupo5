@@ -22,14 +22,14 @@ if ENV in {"prod", "production"} and not ADMIN_TOKEN_GUARD_ENABLED:
 
 
 class UserCreate(BaseModel):
-    name: str
+    full_name: str
     email: str
     password: str
     type: int = Field(..., ge=1, le=2)
 
 
 class UserUpdate(BaseModel):
-    name: Optional[str] = None
+    full_name: Optional[str] = None
     email: Optional[str] = None
     password: Optional[str] = None
     type: Optional[int] = Field(None, ge=1, le=2)
@@ -71,8 +71,8 @@ async def verify_admin_token(x_token: str = Header(...), db: Session = Depends(g
 
 
 router = APIRouter(
-    prefix="/users",
-    tags=["Users"],
+    prefix="/admin",
+    tags=["Admin"],
     dependencies=[Depends(verify_admin_token)] if ADMIN_TOKEN_GUARD_ENABLED else [],
 )
 
@@ -86,7 +86,7 @@ async def add_user(user: UserCreate, db: Session = Depends(get_db)):
 
     db_user = User(
         id=uuid4(),
-        full_name=user.name.strip(),
+        full_name=user.full_name.strip(),
         email=email,
         password_hash=get_password_hash(user.password),
         role=_role_by_type(user.type),
@@ -101,7 +101,7 @@ async def add_user(user: UserCreate, db: Session = Depends(get_db)):
             "id": str(db_user.id),
             "name": db_user.full_name,
             "email": db_user.email,
-            "type": _user_type_by_role(db_user.role),
+            "type": db_user.role,
         },
     }
 
@@ -123,7 +123,7 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
             "id": str(user.id),
             "name": user.full_name,
             "email": user.email,
-            "type": _user_type_by_role(user.role),
+            "type": user.role,
         },
     }
 
@@ -177,8 +177,8 @@ async def update_user(updated_user: UserUpdate, user_id: str, db: Session = Depe
     if not user:
         raise HTTPException(status_code=404, detail={"msg": "User id no encontrado"})
 
-    if updated_user.name is not None:
-        user.full_name = updated_user.name.strip()
+    if updated_user.full_name is not None:
+        user.full_name = updated_user.full_name.strip()
     if updated_user.email is not None:
         new_email = updated_user.email.strip().lower()
         existing = (
@@ -206,7 +206,7 @@ async def update_user(updated_user: UserUpdate, user_id: str, db: Session = Depe
             "id": str(user.id),
             "name": user.full_name,
             "email": user.email,
-            "type": _user_type_by_role(user.role),
+            "type": user.role,
         },
     }
 
