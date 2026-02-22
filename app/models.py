@@ -74,7 +74,10 @@ class User(Base):
     updated_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
 
     categories = relationship("Category", back_populates="user")
-    expenses = relationship("Expense", back_populates="user")
+    expenses = relationship(
+    "Expense",
+    back_populates="user",
+    overlaps="category,expenses",)
     user_tokens = relationship("UserToken", back_populates="user")
     access_logs = relationship("AccessLog", back_populates="user")
 
@@ -94,7 +97,10 @@ class Category(Base):
     created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
 
     user = relationship("User", back_populates="categories")
-    expenses = relationship("Expense", back_populates="category")
+    expenses = relationship(
+    "Expense",
+    back_populates="category",
+    overlaps="user,expenses",)
 
 
 class Expense(Base):
@@ -119,8 +125,18 @@ class Expense(Base):
     created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
     updated_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
 
-    user = relationship("User", back_populates="expenses")
-    category = relationship("Category", back_populates="expenses")
+    user = relationship(
+    "User",
+        back_populates="expenses",
+        foreign_keys=[user_id],
+        overlaps="category,expenses",
+    )
+    category = relationship(
+        "Category",
+        back_populates="expenses",
+        foreign_keys=[category_id, user_id],
+        overlaps="user,expenses",
+    )
 
 
 class TokenDevice(Base):

@@ -1,18 +1,14 @@
+import os
 from typing import Optional
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Acceso, Estado, Rol, Usuario
+from app.models import AccessEventType, AccessLog, User, UserRole, UserToken
 from app.security import get_password_hash
-
-router = APIRouter(
-    prefix="/users",
-    tags=["Users"]
-)
 
 
 class UserCreate(BaseModel):
@@ -29,37 +25,64 @@ class UserUpdate(BaseModel):
     type: Optional[int] = Field(None, ge=1, le=2)
 
 
-def _role_name_by_type(user_type: int):
-    return "admin" if user_type == 2 else "user"
+def _role_by_type(user_type: int):
+    return UserRole.admin if user_type == 2 else UserRole.user
 
 
-def _role_label(role_name: str | None):
-    return "Administrador" if (role_name or "").lower() == "admin" else "Usuario"
+def _role_label(role: UserRole | None):
+    return "Administrador" if role == UserRole.admin else "Usuario"
 
 
-def _user_type_by_role(role_name: str | None):
-    return 2 if (role_name or "").lower() == "admin" else 1
+def _user_type_by_role(role: UserRole | None):
+    return 2 if role == UserRole.admin else 1
+
+
+async def verify_admin_token(x_token: str = Header(...), db: Session = Depends(get_db)):
+    # Permite activar control admin sin forzarlo en entornos donde aun no se usa.
+    try:
+        token_uuid = UUID(x_token)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail={"msg": "Token incorrecto."}) from exc
+
+    user_token = db.query(UserToken).filter(UserToken.token_id == token_uuid).first()
+    if not user_token:
+        raise HTTPException(status_code=403, detail={"msg": "Token incorrecto."})
+    if user_token.revoked_at is not None:
+        raise HTTPException(status_code=403, detail={"msg": "Token vencido."})
+    if not user_token.user or user_token.user.role != UserRole.admin:
+        raise HTTPException(
+            status_code=403,
+            detail={"msg": "Acceso denegado: Se requiere rol Admin."},
+        )
+    return user_token.user
+
+
+ADMIN_TOKEN_GUARD_ENABLED = os.getenv("ADMIN_TOKEN_GUARD_ENABLED", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
+router = APIRouter(
+    prefix="/users",
+    tags=["Users"],
+    dependencies=[Depends(verify_admin_token)] if ADMIN_TOKEN_GUARD_ENABLED else [],
+)
 
 
 @router.put("/")
 async def add_user(user: UserCreate, db: Session = Depends(get_db)):
-    existing = db.query(Usuario).filter(Usuario.email == user.email.strip().lower()).first()
+    email = user.email.strip().lower()
+    existing = db.query(User).filter(User.email == email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email ya registrado")
 
-    role_name = _role_name_by_type(user.type)
-    role = db.query(Rol).filter(Rol.nombre == role_name).first()
-    if not role:
-        role = Rol(id=uuid4(), nombre=role_name)
-        db.add(role)
-        db.flush()
-
-    db_user = Usuario(
+    db_user = User(
         id=uuid4(),
-        name=user.name,
-        email=user.email.strip().lower(),
-        contra_hash=get_password_hash(user.password),
-        rol_id=role.id,
+        full_name=user.name.strip(),
+        email=email,
+        password_hash=get_password_hash(user.password),
+        role=_role_by_type(user.type),
     )
     db.add(db_user)
     db.commit()
@@ -69,10 +92,10 @@ async def add_user(user: UserCreate, db: Session = Depends(get_db)):
         "msg": "Usuario creado",
         "user": {
             "id": str(db_user.id),
-            "name": db_user.name,
+            "name": db_user.full_name,
             "email": db_user.email,
-            "type": user.type,
-        }
+            "type": _user_type_by_role(db_user.role),
+        },
     }
 
 
@@ -80,15 +103,10 @@ async def add_user(user: UserCreate, db: Session = Depends(get_db)):
 async def get_user(user_id: str, db: Session = Depends(get_db)):
     try:
         user_uuid = UUID(user_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="User id invalido")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="User id invalido") from exc
 
-    user = (
-        db.query(Usuario)
-        .options(joinedload(Usuario.rol))
-        .filter(Usuario.id == user_uuid)
-        .first()
-    )
+    user = db.query(User).filter(User.id == user_uuid).first()
     if not user:
         raise HTTPException(status_code=404, detail="User id no encontrado.")
 
@@ -96,10 +114,10 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
         "msg": "",
         "data": {
             "id": str(user.id),
-            "name": user.name,
+            "name": user.full_name,
             "email": user.email,
-            "type": _user_type_by_role(user.rol.nombre if user.rol else None),
-        }
+            "type": _user_type_by_role(user.role),
+        },
     }
 
 
@@ -108,38 +126,35 @@ async def get_users(
     user_type: Optional[int] = Query(default=None, ge=1, le=2),
     db: Session = Depends(get_db),
 ):
-    users = db.query(Usuario).options(joinedload(Usuario.rol)).all()
+    users = db.query(User).all()
 
     data = []
     for user in users:
-        role_name = user.rol.nombre if user.rol else "user"
-        role_label = _role_label(role_name)
-        current_type = _user_type_by_role(role_name)
-
+        current_type = _user_type_by_role(user.role)
         if user_type is not None and current_type != user_type:
             continue
 
         latest_access = (
-            db.query(Acceso)
-            .join(Estado, Acceso.estado_id == Estado.id)
+            db.query(AccessLog)
             .filter(
-                Acceso.usuario_id == user.id,
-                Estado.nombre == "LOGIN_SUCCESS",
+                AccessLog.user_id == user.id,
+                AccessLog.event_type == AccessEventType.LOGIN_SUCCESS,
             )
-            .order_by(Acceso.fecha.desc())
+            .order_by(AccessLog.created_at.desc())
             .first()
         )
+        last_access = latest_access.created_at.strftime("%d/%m/%Y") if latest_access else "-"
 
-        last_access = latest_access.fecha.strftime("%d/%m/%Y") if latest_access and latest_access.fecha else "-"
-
-        data.append({
-            "id": str(user.id),
-            "nombre": user.name,
-            "email": user.email,
-            "rol": role_label,
-            "ultimoAcceso": last_access,
-            "type": current_type,
-        })
+        data.append(
+            {
+                "id": str(user.id),
+                "nombre": user.full_name,
+                "email": user.email,
+                "rol": _role_label(user.role),
+                "ultimoAcceso": last_access,
+                "type": current_type,
+            }
+        )
 
     return {"msg": "", "data": data}
 
@@ -148,27 +163,21 @@ async def get_users(
 async def update_user(updated_user: UserUpdate, user_id: str, db: Session = Depends(get_db)):
     try:
         user_uuid = UUID(user_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="User id invalido")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="User id invalido") from exc
 
-    user = db.query(Usuario).options(joinedload(Usuario.rol)).filter(Usuario.id == user_uuid).first()
+    user = db.query(User).filter(User.id == user_uuid).first()
     if not user:
         raise HTTPException(status_code=404, detail="User id no encontrado.")
 
     if updated_user.name is not None:
-        user.name = updated_user.name
+        user.full_name = updated_user.name.strip()
     if updated_user.email is not None:
         user.email = updated_user.email.strip().lower()
     if updated_user.password is not None:
-        user.contra_hash = get_password_hash(updated_user.password)
+        user.password_hash = get_password_hash(updated_user.password)
     if updated_user.type is not None:
-        role_name = _role_name_by_type(updated_user.type)
-        role = db.query(Rol).filter(Rol.nombre == role_name).first()
-        if not role:
-            role = Rol(id=uuid4(), nombre=role_name)
-            db.add(role)
-            db.flush()
-        user.rol_id = role.id
+        user.role = _role_by_type(updated_user.type)
 
     db.commit()
     db.refresh(user)
@@ -177,10 +186,10 @@ async def update_user(updated_user: UserUpdate, user_id: str, db: Session = Depe
         "msg": "Usuario actualizado",
         "data": {
             "id": str(user.id),
-            "name": user.name,
+            "name": user.full_name,
             "email": user.email,
-            "type": _user_type_by_role(user.rol.nombre if user.rol else None),
-        }
+            "type": _user_type_by_role(user.role),
+        },
     }
 
 
@@ -188,10 +197,10 @@ async def update_user(updated_user: UserUpdate, user_id: str, db: Session = Depe
 async def delete_user(user_id: str, db: Session = Depends(get_db)):
     try:
         user_uuid = UUID(user_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="User id invalido")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="User id invalido") from exc
 
-    user = db.query(Usuario).filter(Usuario.id == user_uuid).first()
+    user = db.query(User).filter(User.id == user_uuid).first()
     if not user:
         raise HTTPException(status_code=404, detail="User id no encontrado.")
 
@@ -204,44 +213,40 @@ async def delete_user(user_id: str, db: Session = Depends(get_db)):
 async def get_logs_user(user_id: str, db: Session = Depends(get_db)):
     try:
         user_uuid = UUID(user_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="User id invalido")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="User id invalido") from exc
 
-    user = db.query(Usuario).options(joinedload(Usuario.rol)).filter(Usuario.id == user_uuid).first()
+    user = db.query(User).filter(User.id == user_uuid).first()
     if not user:
         raise HTTPException(status_code=404, detail="User id no encontrado.")
 
     logs_db = (
-        db.query(Acceso)
-        .options(
-            joinedload(Acceso.estado),
-            joinedload(Acceso.navegador),
-            joinedload(Acceso.sistema_operativo),
-        )
-        .filter(Acceso.usuario_id == user_uuid)
-        .order_by(Acceso.fecha.desc())
+        db.query(AccessLog)
+        .filter(AccessLog.user_id == user_uuid)
+        .order_by(AccessLog.created_at.desc())
         .all()
     )
 
     logs = []
     for access in logs_db:
-        logs.append({
-            "navegador": access.navegador.nombre if access.navegador else "Desconocido",
-            "sistema_operativo": access.sistema_operativo.nombre if access.sistema_operativo else "Desconocido",
-            "ip": access.ip or "-",
-            "fecha": access.fecha.strftime("%d/%m/%Y") if access.fecha else "-",
-            "hora": access.fecha.strftime("%H:%M") if access.fecha else "-",
-            "accion": (access.estado.nombre if access.estado else "DESCONOCIDA").upper(),
-        })
+        logs.append(
+            {
+                "ip": access.ip_address or "-",
+                "web_agent": access.web_agent or "Desconocido",
+                "fecha": access.created_at.strftime("%d/%m/%Y") if access.created_at else "-",
+                "hora": access.created_at.strftime("%H:%M") if access.created_at else "-",
+                "accion": access.event_type.value if access.event_type else "DESCONOCIDA",
+                "attempt_email": access.attempt_email,
+            }
+        )
 
-    role_label = _role_label(user.rol.nombre if user.rol else None)
     return {
         "msg": "",
         "user": {
             "id": str(user.id),
-            "nombre": user.name,
+            "nombre": user.full_name,
             "email": user.email,
-            "rol": role_label,
+            "rol": _role_label(user.role),
         },
         "data": logs,
     }
