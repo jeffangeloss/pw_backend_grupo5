@@ -7,8 +7,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import AccessEventType, AccessLog, User, UserRole, UserToken
-from app.security import get_password_hash
+from app.models import AccessEventType, AccessLog, User, UserRole
+from app.security import decode_access_token, get_password_hash
 
 
 class UserCreate(BaseModel):
@@ -40,21 +40,24 @@ def _user_type_by_role(role: UserRole | None):
 async def verify_admin_token(x_token: str = Header(...), db: Session = Depends(get_db)):
     # Permite activar control admin sin forzarlo en entornos donde aun no se usa.
     try:
-        token_uuid = UUID(x_token)
-    except ValueError as exc:
+        payload = decode_access_token(x_token)
+    except Exception as exc:
         raise HTTPException(status_code=403, detail={"msg": "Token incorrecto."}) from exc
 
-    user_token = db.query(UserToken).filter(UserToken.token_id == token_uuid).first()
-    if not user_token:
+    email = (payload.get("sub") or "").strip().lower()
+    if not email:
         raise HTTPException(status_code=403, detail={"msg": "Token incorrecto."})
-    if user_token.revoked_at is not None:
-        raise HTTPException(status_code=403, detail={"msg": "Token vencido."})
-    if not user_token.user or user_token.user.role != UserRole.admin:
+
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=403, detail={"msg": "Token incorrecto."})
+
+    if user.role != UserRole.admin:
         raise HTTPException(
             status_code=403,
             detail={"msg": "Acceso denegado: Se requiere rol Admin."},
         )
-    return user_token.user
+    return user
 
 
 ADMIN_TOKEN_GUARD_ENABLED = os.getenv("ADMIN_TOKEN_GUARD_ENABLED", "false").lower() in {

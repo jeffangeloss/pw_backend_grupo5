@@ -8,12 +8,9 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
-    ForeignKeyConstraint,
-    Integer,
     Numeric,
     String,
     Text,
-    UniqueConstraint,
     func,
     text,
 )
@@ -27,11 +24,6 @@ class UserRole(str, enum.Enum):
     admin = "admin"
 
 
-class TokenStatus(str, enum.Enum):
-    ACTIVE = "ACTIVE"
-    REVOKED = "REVOKED"
-
-
 class AccessEventType(str, enum.Enum):
     LOGIN_SUCCESS = "LOGIN_SUCCESS"
     LOGIN_FAIL = "LOGIN_FAIL"
@@ -42,8 +34,6 @@ class AccessEventType(str, enum.Enum):
     EMAIL_VERIFY_SUCCESS = "EMAIL_VERIFY_SUCCESS"
     ACCOUNT_DISABLED = "ACCOUNT_DISABLED"
     ACCOUNT_ENABLED = "ACCOUNT_ENABLED"
-    PIN_2FA_SUCCESS = "PIN_2FA_SUCCESS"
-    PIN_2FA_FAIL = "PIN_2FA_FAIL"
 
 
 class User(Base):
@@ -73,50 +63,28 @@ class User(Base):
     created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
     updated_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
 
-    categories = relationship("Category", back_populates="user")
-    expenses = relationship(
-    "Expense",
-    back_populates="user",
-    overlaps="category,expenses",)
-    user_tokens = relationship("UserToken", back_populates="user")
+    expenses = relationship("Expense", back_populates="user")
     access_logs = relationship("AccessLog", back_populates="user")
 
 
 class Category(Base):
     __tablename__ = "category"
-    __table_args__ = (
-        UniqueConstraint("user_id", "name", name="uq_category_user_name"),
-        UniqueConstraint("id", "user_id", name="uq_category_id_user_id"),
-    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
-
-    name = Column(String(100), nullable=False)
+    name = Column(String(100), nullable=False, unique=True)
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
 
-    user = relationship("User", back_populates="categories")
-    expenses = relationship(
-    "Expense",
-    back_populates="category",
-    overlaps="user,expenses",)
+    expenses = relationship("Expense", back_populates="category")
 
 
 class Expense(Base):
     __tablename__ = "expense"
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["category_id", "user_id"],
-            ["category.id", "category.user_id"],
-            name="fk_expense_category_user",
-        ),
-    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
-    category_id = Column(UUID(as_uuid=True), nullable=False)
+    category_id = Column(UUID(as_uuid=True), ForeignKey("category.id"), nullable=False)
 
     amount = Column(Numeric(15, 2), nullable=False)
     expense_date = Column(DateTime, nullable=False)
@@ -125,54 +93,8 @@ class Expense(Base):
     created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
     updated_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
 
-    user = relationship(
-    "User",
-        back_populates="expenses",
-        foreign_keys=[user_id],
-        overlaps="category,expenses",
-    )
-    category = relationship(
-        "Category",
-        back_populates="expenses",
-        foreign_keys=[category_id, user_id],
-        overlaps="user,expenses",
-    )
-
-
-class TokenDevice(Base):
-    __tablename__ = "token_device"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-
-    serial = Column(String(80), nullable=False, unique=True)
-    secret_enc = Column(String(255), nullable=False)
-
-    digits = Column(Integer, nullable=False, default=4, server_default=text("4"))
-    period = Column(Integer, nullable=False, default=30, server_default=text("30"))
-    status = Column(
-        Enum(TokenStatus, name="token_status"),
-        nullable=False,
-        default=TokenStatus.ACTIVE,
-        server_default=text("'ACTIVE'"),
-    )
-
-    created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
-    last_seen_at = Column(DateTime, nullable=True)
-
-    user_tokens = relationship("UserToken", back_populates="token")
-
-
-class UserToken(Base):
-    __tablename__ = "user_token"
-
-    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), primary_key=True)
-    token_id = Column(UUID(as_uuid=True), ForeignKey("token_device.id"), primary_key=True)
-
-    assigned_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
-    revoked_at = Column(DateTime, nullable=True)
-
-    user = relationship("User", back_populates="user_tokens")
-    token = relationship("TokenDevice", back_populates="user_tokens")
+    user = relationship("User", back_populates="expenses")
+    category = relationship("Category", back_populates="expenses")
 
 
 class AccessLog(Base):
