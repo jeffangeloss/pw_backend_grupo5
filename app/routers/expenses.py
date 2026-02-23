@@ -115,6 +115,7 @@ async def get_expenses(
     date_to: Optional[datetime] = Query(default=None),
     amount_min: Optional[float] = Query(default=None, ge=0),
     amount_max: Optional[float] = Query(default=None, ge=0),
+    order: Optional[str] = Query(default="desc"),
     db: Session = Depends(get_db),
 ):
     query = (
@@ -134,7 +135,12 @@ async def get_expenses(
     if amount_max is not None:
         query = query.filter(Expense.amount <= amount_max)
 
-    expenses_list = query.order_by(Expense.expense_date.desc()).all()
+    if order == "asc":
+        query = query.order_by(Expense.expense_date.asc())
+    else:
+        query = query.order_by(Expense.expense_date.desc())
+    
+    expenses_list = query.all()
     return {
         "msg": "",
         "data": [_serialize_expense(expense) for expense in expenses_list],
