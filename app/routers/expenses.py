@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 from ..database import get_db
 from ..models import Category, Expense, User
 from ..security import decode_access_token
+from ..schemas import ExpenseUpdate
 
 router = APIRouter(
     prefix="/expenses",
