@@ -20,14 +20,14 @@ class UserCreate(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=300)
     email: EmailStr
     password: str = Field(..., min_length=8)
-    type: int = Field(..., ge=1, le=2)
+    type: int = Field(..., ge=1, le=4)
 
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = Field(None, min_length=1, max_length=300)
     email: Optional[EmailStr] = None
     password: Optional[str] = Field(None, min_length=8)
-    type: Optional[int] = Field(None, ge=1, le=2)
+    type: Optional[int] = Field(None, ge=1, le=4)
 
 
 
