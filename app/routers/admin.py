@@ -2,7 +2,7 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -21,14 +21,14 @@ ADMIN_PANEL_ROLES = {UserRole.owner, UserRole.admin, UserRole.auditor}
 
 class UserCreate(BaseModel):
     full_name: str
-    email: str
+    email: EmailStr
     password: str
     type: int = Field(..., ge=1, le=4)
 
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
-    email: Optional[str] = None
+    email: Optional[EmailStr] = None
     password: Optional[str] = None
     type: Optional[int] = Field(None, ge=1, le=4)
 
@@ -52,6 +52,19 @@ def _role_label(role: UserRole | None):
 
 def _user_type_by_role(role: UserRole | None):
     return ROLE_TO_TYPE.get(role or UserRole.user, 1)
+
+
+def _serialize_user_payload(user: User):
+    role_value = user.role.value if user.role else UserRole.user.value
+    return {
+        "id": str(user.id),
+        "name": user.full_name,
+        "full_name": user.full_name,
+        "email": user.email,
+        "type": _user_type_by_role(user.role),
+        "rol": role_value,
+        "role_value": role_value,
+    }
 
 
 def _resolve_admin_token(x_token: Optional[str], authorization: Optional[str]):
@@ -236,13 +249,7 @@ async def add_user(
 
     return {
         "msg": "Usuario creado",
-        "user": {
-            "id": str(db_user.id),
-            "name": db_user.full_name,
-            "email": db_user.email,
-            "type": _user_type_by_role(db_user.role),
-            "rol": db_user.role.value,
-        },
+        "user": _serialize_user_payload(db_user),
     }
 
 
@@ -265,13 +272,7 @@ async def get_user(
 
     return {
         "msg": "",
-        "data": {
-            "id": str(user.id),
-            "name": user.full_name,
-            "email": user.email,
-            "type": _user_type_by_role(user.role),
-            "rol": user.role.value,
-        },
+        "data": _serialize_user_payload(user),
     }
 
 
@@ -307,6 +308,8 @@ async def get_users(
             {
                 "id": str(user.id),
                 "nombre": user.full_name,
+                "name": user.full_name,
+                "full_name": user.full_name,
                 "email": user.email,
                 "rol": _role_label(user.role),
                 "ultimoAcceso": last_access,
@@ -380,13 +383,7 @@ async def update_user(
 
     return {
         "msg": "Usuario actualizado",
-        "data": {
-            "id": str(user.id),
-            "name": user.full_name,
-            "email": user.email,
-            "type": _user_type_by_role(user.role),
-            "rol": user.role.value if user.role else UserRole.user.value,
-        },
+        "data": _serialize_user_payload(user),
     }
 
 
