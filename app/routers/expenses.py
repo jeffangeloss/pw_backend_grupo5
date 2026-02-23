@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import extract, func
 from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
@@ -144,3 +144,144 @@ async def get_expenses(
         "msg": "",
         "data": [_serialize_expense(expense) for expense in expenses_list],
     }
+
+@router.put("/{expense_id}")
+async def update_expense(
+    expense_id: UUID,
+    payload: ExpenseUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    expense = (
+        db.query(Expense).filter(
+            Expense.id == expense_id,
+            Expense.user_id == current_user.id
+        ).first()
+    )
+    
+    if not expense:
+        raise HTTPException(
+            status_code=404,
+            detail="Egreso no encontrado"
+        )
+    
+    if payload.amount != None:
+        expense.amount = payload.amount
+    
+    if payload.category_id != None:
+        expense.category_id = payload.category_id
+
+    if payload.expense_date != None:
+        expense.expense_date = payload.expense_date
+
+    if payload.description != None:
+        expense.description = payload.description
+    
+    expense.updated_at = datetime.utcnow()
+    
+    db.commit()
+    db.refresh(expense)
+    
+    return {
+        "msg" : "Egreso actualizado",
+        "data" : _serialize_expense(expense)
+    }
+
+@router.delete("/{expense_id}")
+async def delete_expense(
+    expense_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    expense = (
+        db.query(Expense).filter(
+            Expense.id == expense_id,
+            Expense.user_id == current_user.id
+        ).first()
+    )
+    
+    if not expense:
+        raise HTTPException(
+            status_code=404,
+            detail="Egreso no encontrado"
+        )
+    
+    db.delete(expense)
+    db.commit()
+    
+    return {
+        "msg" : "Egreso eliminado",
+        "data" : _serialize_expense(expense)
+    }
+
+@router.get("/stats")
+async def get_expenses_stats(
+    year: Optional[int] = None,
+    month: Optional[int] = Query(default=None, ge=1, le=12),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    db_query = db.query(Expense).filter(Expense.user_id == current_user.id)
+
+    # Filtrado por año
+    if year:
+        db_query = db_query.filter(extract("year", Expense.expense_date) == year)
+
+    # filtrado por mes
+    if month:
+        db_query = db_query.filter(extract("month", Expense.expense_date) == month)
+    
+    # total general
+    total_general = (
+        db_query.with_entities(
+            func.coalesce(func.sum(Expense.amount), 0)
+        ).scalar()
+    )
+
+    # total por mes
+    monthly_rows = (
+        db_query.with_entities(
+            extract("month", Expense.expense_date).label("month"),
+            func.sum(Expense.amount).label("total")
+        )
+        .group_by("month")
+        .order_by("month")
+        .all()
+    )
+
+    monthly = [
+        {
+            "month": int(row.month),
+            "total": float(row.total)
+        }
+        for row in monthly_rows
+    ]
+
+    # total por categoria
+    category_rows = (
+        db.query(
+            Category.name.label("category"),
+            func.sum(Expense.amount).label("total")
+        )
+        .join(Expense, Expense.category_id == Category.id)
+        .filter(Expense.user_id == current_user.id)
+        .group_by(Category.name)
+        .order_by(func.sum(Expense.amount).desc())
+        .all()
+    )
+
+    by_category = [
+        {
+            "category": row.category,
+            "total": float(row.total)
+        }
+        for row in category_rows
+    ]
+
+    return {
+        "total": float(total_general or 0),
+        "monthly": monthly,
+        "by_category": by_category
+    }
+
+
