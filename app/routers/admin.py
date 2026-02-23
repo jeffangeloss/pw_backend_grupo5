@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from app.database import get_db
 from app.models import AccessEventType, AccessLog, AdminAuditLog, User, UserRole
@@ -590,3 +591,32 @@ async def delete_user(
             detail={"msg": "No se puede eliminar el usuario porque tiene registros relacionados"},
         ) from exc
     return {"msg": "User borrado correctamente."}
+
+
+@router.get("/userStats")
+async def get_user_stats(db: Session = Depends(get_db)):
+    total_users = db.query(func.count(User.id)).scalar()
+
+    users_by_month = (
+        db.query(
+            func.to_char(
+                func.date_trunc("month", User.created_at),
+                "YYYY-MM"
+            ).label("month"),
+            func.count(User.id).label("count")
+        )
+        .group_by("month")
+        .order_by("month")
+        .all()
+    )
+
+    return {
+        "total_users": total_users,
+        "users_by_month": [
+            {
+                "month": row.month,
+                "count": row.count
+            }
+            for row in users_by_month
+        ]
+    }
