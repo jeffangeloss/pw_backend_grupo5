@@ -4,6 +4,8 @@ from pydantic import BaseModel, EmailStr, Field
 
 from datetime import datetime
 
+from uuid import UUID
+
 
 class LoginRequest(BaseModel):
     username: Optional[EmailStr] = None
@@ -39,7 +41,14 @@ class ResetForm(BaseModel):
     password: str = Field(..., min_length=8)
 
 class ExpenseUpdate(BaseModel):
-    amount: Optional[float]
-    category_id: Optional[str]
-    expense_date: Optional[datetime]
-    description: Optional[str]
+    amount: Optional[float] = None
+    category_id: Optional[UUID] = None
+    expense_date: Optional[datetime] = None
+    description: Optional[str] = None
+
+class CategoryOut(BaseModel):
+    id: UUID
+    name: str
+
+    class Config:
+        from_attributes = True

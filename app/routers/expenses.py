@@ -142,7 +142,7 @@ async def get_expenses(
 
 @router.put("/{expense_id}")
 async def update_expense(
-    expense_id: str,
+    expense_id: UUID,
     payload: ExpenseUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
