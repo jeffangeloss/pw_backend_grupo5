@@ -99,14 +99,14 @@ async def add_user(user: UserCreate, db: Session = Depends(get_db)):
         "msg": "Usuario creado",
         "user": {
             "id": str(db_user.id),
-            "name": db_user.full_name,
+            "full_name": db_user.full_name,
             "email": db_user.email,
             "type": _user_type_by_role(db_user.role),
         },
     }
 
 
-@router.get("/{user_id}")
+@router.get("/{user_id}/")
 async def get_user(user_id: str, db: Session = Depends(get_db)):
     try:
         user_uuid = UUID(user_id)
@@ -117,13 +117,26 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
     if not user:
         raise HTTPException(status_code=404, detail={"msg": "User id no encontrado"})
 
+    latest_access = (
+        db.query(AccessLog)
+        .filter(
+            AccessLog.user_id == user.id,
+            AccessLog.event_type == AccessEventType.LOGIN_SUCCESS,
+        )
+        .order_by(AccessLog.created_at.desc())
+        .first()
+    )
+    
+    last_access_str = latest_access.created_at.strftime("%d/%m/%Y") if latest_access else "-"
+
     return {
         "msg": "",
         "data": {
             "id": str(user.id),
-            "name": user.full_name,
+            "full_name": user.full_name,
             "email": user.email,
-            "type": _user_type_by_role(db_user.role),
+            "type": _user_type_by_role(user.role),
+            "ultimoAcceso": last_access_str,
         },
     }
 
@@ -155,18 +168,17 @@ async def get_users(
         data.append(
             {
                 "id": str(user.id),
-                "nombre": user.full_name,
+                "full_name": user.full_name,
                 "email": user.email,
-                "rol": _role_label(user.role),
-                "ultimoAcceso": last_access,
                 "type": current_type,
+                "ultimoAcceso": last_access,
             }
         )
 
     return {"msg": "", "data": data}
 
 
-@router.patch("/{user_id}")
+@router.patch("/{user_id}/")
 async def update_user(updated_user: UserUpdate, user_id: str, db: Session = Depends(get_db)):
     try:
         user_uuid = UUID(user_id)
@@ -204,14 +216,14 @@ async def update_user(updated_user: UserUpdate, user_id: str, db: Session = Depe
         "msg": "Usuario actualizado",
         "data": {
             "id": str(user.id),
-            "name": user.full_name,
+            "full_name": user.full_name,
             "email": user.email,
-            "type": user.role,
+            "type": _user_type_by_role(user.role),
         },
     }
 
 
-@router.delete("/{user_id}")
+@router.delete("/{user_id}/")
 async def delete_user(user_id: str, db: Session = Depends(get_db)):
     try:
         user_uuid = UUID(user_id)
