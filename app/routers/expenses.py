@@ -211,8 +211,7 @@ async def delete_expense(
     db.commit()
     
     return {
-        "msg" : "Egreso eliminado",
-        "data" : _serialize_expense(expense)
+        "msg" : "Egreso eliminado"
     }
 
 @router.get("/stats")
