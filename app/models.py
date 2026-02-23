@@ -22,6 +22,8 @@ from .database import Base
 class UserRole(str, enum.Enum):
     user = "user"
     admin = "admin"
+    owner = "owner"
+    auditor = "auditor"
 
 
 class AccessEventType(str, enum.Enum):
@@ -113,3 +115,18 @@ class AccessLog(Base):
     web_agent = Column(String(255), nullable=True)
 
     user = relationship("User", back_populates="access_logs")
+
+
+class AdminAuditLog(Base):
+    __tablename__ = "admin_audit_log"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    actor_user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
+    target_user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=True)
+    action = Column(String(100), nullable=False)
+    details = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+    ip_address = Column(String(45), nullable=True)
+    web_agent = Column(String(255), nullable=True)

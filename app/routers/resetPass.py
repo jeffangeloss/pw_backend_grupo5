@@ -77,17 +77,22 @@ router = APIRouter(
     tags = ["PassReset"]
 )
 
-#configuracion para envio de email
-conf = ConnectionConfig(
-    MAIL_USERNAME = os.getenv("SENDER_EMAIL"),
-    MAIL_PASSWORD = os.getenv("SENDER_PASSWORD"),
-    MAIL_FROM = os.getenv("SENDER_EMAIL"),
-    MAIL_PORT = 587,
-    MAIL_SERVER = "smtp.gmail.com",
-    MAIL_STARTTLS=True,
-    MAIL_SSL_TLS=False,
-    USE_CREDENTIALS=True
-)
+def _build_mail_config():
+    sender_email = os.getenv("SENDER_EMAIL")
+    sender_password = os.getenv("SENDER_PASSWORD")
+    if not sender_email or not sender_password:
+        return None
+
+    return ConnectionConfig(
+        MAIL_USERNAME=sender_email,
+        MAIL_PASSWORD=sender_password,
+        MAIL_FROM=sender_email,
+        MAIL_PORT=587,
+        MAIL_SERVER="smtp.gmail.com",
+        MAIL_STARTTLS=True,
+        MAIL_SSL_TLS=False,
+        USE_CREDENTIALS=True,
+    )
 
 @router.put("/request")
 async def reset_pass_request(
@@ -133,9 +138,10 @@ async def reset_pass_request(
             subtype="html"
         )
 
-        fm = FastMail(conf)
-
-        bg_tasks.add_task(fm.send_message, message)
+        conf = _build_mail_config()
+        if conf:
+            fm = FastMail(conf)
+            bg_tasks.add_task(fm.send_message, message)
 
     return {
         "msg" : "Se completo el request"

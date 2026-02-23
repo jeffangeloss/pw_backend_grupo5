@@ -25,6 +25,24 @@ VALUES
   'admin'::user_role,
   true,
   true
+),
+(
+  '80b44d36-f154-4a08-8cb7-1eec0204cb59',
+  'Owner Demo',
+  'ejemplo@owner.com',
+  '$argon2id$v=19$m=65536,t=3,p=4$7MsLqdosXJphqkqGlw7HQA$z1BHKiljeIEQa5Jh3mTe+RIuxKtWmHd7jcms7m4CZPQ',
+  'owner'::user_role,
+  true,
+  true
+),
+(
+  'a7e2e064-0358-4688-8a24-080e6d024920',
+  'Auditor Demo',
+  'ejemplo@auditor.com',
+  '$argon2id$v=19$m=65536,t=3,p=4$7MsLqdosXJphqkqGlw7HQA$z1BHKiljeIEQa5Jh3mTe+RIuxKtWmHd7jcms7m4CZPQ',
+  'auditor'::user_role,
+  true,
+  true
 )
 ON CONFLICT (email) DO UPDATE
 SET

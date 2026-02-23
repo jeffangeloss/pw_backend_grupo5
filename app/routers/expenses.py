@@ -2,7 +2,6 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
