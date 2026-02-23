@@ -6,7 +6,7 @@ import uuid
 import os
 
 from ..security import get_password_hash
-from ..schemas import ResetForm
+from ..schemas import ResetForm, ResetRequest
 from ..database import get_db
 from ..models import AccessEventType, AccessLog, User
 
@@ -91,12 +91,12 @@ conf = ConnectionConfig(
 
 @router.put("/request")
 async def reset_pass_request(
-    email : str,
+    payload: ResetRequest,
     request: Request,
     bg_tasks : BackgroundTasks,
     db : Session = Depends(get_db) ):
 
-    db_query = db.query(User).filter(User.email == email)
+    db_query = db.query(User).filter(User.email == payload.email)
     db_user = db_query.first()
     token = str(uuid.uuid4())
     if db_user:
@@ -128,7 +128,7 @@ async def reset_pass_request(
         """
         message = MessageSchema(
             subject="Restablecer contraseña",
-            recipients=[email],
+            recipients=[payload.email],
             body = html_content,
             subtype="html"
         )
@@ -138,8 +138,7 @@ async def reset_pass_request(
         bg_tasks.add_task(fm.send_message, message)
 
     return {
-        "msg" : "Se completo el request",
-        "DELETE" : token
+        "msg" : "Se completo el request"
     }
 
 @router.post("/confirm")
