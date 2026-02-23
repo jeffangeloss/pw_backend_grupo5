@@ -2,6 +2,7 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session, joinedload
 from ..database import get_db
 from ..models import Category, Expense, User
 from ..security import decode_access_token
+from ..schemas import ExpenseUpdate
 
 router = APIRouter(
     prefix="/expenses",
@@ -137,4 +139,73 @@ async def get_expenses(
     return {
         "msg": "",
         "data": [_serialize_expense(expense) for expense in expenses_list],
+    }
+
+@router.put("/{expense_id}")
+async def update_expense(
+    expense_id: str,
+    payload: ExpenseUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    expense = (
+        db.query(Expense).filter(
+            Expense.id == expense_id,
+            Expense.user_id == current_user.id
+        ).first()
+    )
+    
+    if not expense:
+        raise HTTPException(
+            status_code=404,
+            detail="Egreso no encontrado"
+        )
+    
+    if payload.amount != None:
+        expense.amount = payload.amount
+    
+    if payload.category_id != None:
+        expense.category_id = payload.category_id
+
+    if payload.expense_date != None:
+        expense.expense_date = payload.expense_date
+
+    if payload.description != None:
+        expense.description = payload.description
+    
+    expense.updated_at = datetime.utcnow()
+    
+    db.commit()
+    db.refresh(expense)
+    
+    return {
+        "msg" : "Egreso actualizado",
+        "data" : _serialize_expense(expense)
+    }
+
+@router.delete("/{expense_id}")
+async def delete_expense(
+    expense_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    expense = (
+        db.query(Expense).filter(
+            Expense.id == expense_id,
+            Expense.user_id == current_user.id
+        ).first()
+    )
+    
+    if not expense:
+        raise HTTPException(
+            status_code=404,
+            detail="Egreso no encontrado"
+        )
+    
+    db.delete(expense)
+    db.commit()
+    
+    return {
+        "msg" : "Egreso eliminado",
+        "data" : _serialize_expense(expense)
     }
