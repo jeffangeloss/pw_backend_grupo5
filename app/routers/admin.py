@@ -10,6 +10,7 @@ from app.database import get_db
 from app.models import AccessEventType, AccessLog, User, UserRole
 from app.security import decode_access_token, get_password_hash
 
+## Quitar antes de subir a la nube
 ENV = os.getenv("ENV", "dev").strip().lower()
 ADMIN_TOKEN_GUARD_ENABLED = os.getenv("ADMIN_TOKEN_GUARD_ENABLED", "false").lower() in {
     "1",
@@ -106,16 +107,17 @@ async def add_user(user: UserCreate, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/{user_id}/")
-async def get_user(user_id: str, db: Session = Depends(get_db)):
-    try:
-        user_uuid = UUID(user_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"msg": "User id invalido"}) from exc
+@router.get("/{email}/")
+async def get_user_by_email(email: str, db: Session = Depends(get_db)):
+    email_buscado = email.lower().strip()
 
-    user = db.query(User).filter(User.id == user_uuid).first()
+    user = db.query(User).filter(User.email == email_buscado).first()
+    
     if not user:
-        raise HTTPException(status_code=404, detail={"msg": "User id no encontrado"})
+        raise HTTPException(
+            status_code=404, 
+            detail={"msg": "Usuario no encontrado con ese email"}
+        )
 
     latest_access = (
         db.query(AccessLog)
