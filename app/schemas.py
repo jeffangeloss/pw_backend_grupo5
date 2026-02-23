@@ -2,6 +2,8 @@ from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
+from datetime import datetime
+
 
 class LoginRequest(BaseModel):
     username: Optional[EmailStr] = None
@@ -35,3 +37,8 @@ class ResetForm(BaseModel):
     token: str = Field(..., min_length=10)
     password: str = Field(..., min_length=8)
 
+class ExpenseUpdate(BaseModel):
+    amount: Optional[float]
+    category_id: Optional[str]
+    expense_date: Optional[datetime]
+    description: Optional[str]
