@@ -567,7 +567,7 @@ async def delete_user(
     return {"msg": "User borrado correctamente."}
 
 
-@router.get("/userStats")
+@router.get("/user_stats")
 async def get_user_stats(db: Session = Depends(get_db)):
     total_users = db.query(func.count(User.id)).scalar()
 
