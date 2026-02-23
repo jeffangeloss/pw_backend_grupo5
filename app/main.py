@@ -1,9 +1,13 @@
 from contextlib import asynccontextmanager
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -19,6 +23,37 @@ from .security import (
     is_password_hashed,
     verify_password,
 )
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+UPLOADS_DIR = BASE_DIR / "uploads"
+AVATARS_DIR = UPLOADS_DIR / "avatars"
+MAX_AVATAR_BYTES = 5 * 1024 * 1024
+ALLOWED_AVATAR_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".jpe",
+    ".webp",
+    ".svg",
+    ".heic",
+    ".gif",
+    ".ico",
+    ".xbm",
+    ".xjl",
+    ".xpm",
+    ".dib",
+    ".tif",
+    ".tiff",
+    ".pjpeg",
+    ".pjp",
+    ".apng",
+    ".avif",
+    ".jfif",
+    ".bmp",
+}
+
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+AVATARS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def migrate_plain_passwords_to_hash():
@@ -142,6 +177,24 @@ def _register_logout(token: str, request: Request, db: Session):
     db.commit()
 
 
+def _serialize_user(user: User):
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "name": user.full_name,
+        "rol": user.role.value if user.role else "user",
+        "avatar_url": user.avatar_url,
+        "updated_at": user.updated_at.isoformat() if user.updated_at else None,
+    }
+
+
+def _validate_avatar_extension(filename: str):
+    extension = Path(filename or "").suffix.lower()
+    if extension not in ALLOWED_AVATAR_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Formato de imagen no permitido")
+    return extension
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     migrate_plain_passwords_to_hash()
@@ -156,6 +209,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 
 class LoginRequest(BaseModel):
@@ -179,6 +234,12 @@ class LogoutRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(..., min_length=8)
     new_password: str = Field(..., min_length=8)
+
+
+class UpdateProfileRequest(BaseModel):
+    full_name: Optional[str] = Field(default=None, min_length=1, max_length=300)
+    email: Optional[EmailStr] = None
+    avatar_url: Optional[str] = Field(default=None, max_length=2000)
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
@@ -209,12 +270,7 @@ async def register(register_request: RegisterRequest, db: Session = Depends(get_
 
     return {
         "msg": "Cuenta creada",
-        "user": {
-            "id": str(user.id),
-            "name": user.full_name,
-            "email": user.email,
-            "rol": user.role.value,
-        },
+        "user": _serialize_user(user),
     }
 
 
@@ -272,8 +328,10 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
     return {
         "msg": "Acceso concedido",
         "rol": role_name,
+        "id": str(user.id),
         "email": user.email,
         "name": user.full_name,
+        "avatar_url": user.avatar_url,
         "token": access_token,
         "access_token": access_token,
         "token_type": "bearer",
@@ -316,10 +374,83 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
 @app.get("/me")
 async def read_me(current_user: User = Depends(get_current_user)):
+    return _serialize_user(current_user)
+
+
+@app.patch("/me/profile")
+async def update_my_profile(
+    payload: UpdateProfileRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if payload.full_name is None and payload.email is None and payload.avatar_url is None:
+        raise HTTPException(status_code=400, detail="No hay cambios para actualizar")
+
+    if payload.full_name is not None:
+        clean_name = payload.full_name.strip()
+        if not clean_name:
+            raise HTTPException(status_code=400, detail="Nombre completo requerido")
+        current_user.full_name = clean_name
+
+    if payload.email is not None:
+        clean_email = payload.email.strip().lower()
+        existing = (
+            db.query(User)
+            .filter(User.email == clean_email, User.id != current_user.id)
+            .first()
+        )
+        if existing:
+            raise HTTPException(status_code=400, detail="Email ya registrado")
+        current_user.email = clean_email
+
+    if payload.avatar_url is not None:
+        clean_avatar = payload.avatar_url.strip()
+        current_user.avatar_url = clean_avatar or None
+
+    current_user.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(current_user)
+
     return {
-        "email": current_user.email,
-        "name": current_user.full_name,
-        "rol": current_user.role.value if current_user.role else "user",
+        "msg": "Perfil actualizado",
+        "user": _serialize_user(current_user),
+    }
+
+
+@app.post("/me/avatar")
+async def upload_my_avatar(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Archivo invalido")
+
+    extension = _validate_avatar_extension(file.filename)
+    content_type = (file.content_type or "").lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="El archivo debe ser una imagen")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="El archivo esta vacio")
+    if len(file_bytes) > MAX_AVATAR_BYTES:
+        raise HTTPException(status_code=413, detail="La imagen excede el limite de 5MB")
+
+    safe_name = f"{uuid4().hex}{extension}"
+    destination = AVATARS_DIR / safe_name
+    with destination.open("wb") as out_file:
+        out_file.write(file_bytes)
+
+    current_user.avatar_url = f"/uploads/avatars/{safe_name}"
+    current_user.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(current_user)
+
+    return {
+        "msg": "Imagen de perfil actualizada",
+        "avatar_url": current_user.avatar_url,
+        "user": _serialize_user(current_user),
     }
 
 
@@ -345,6 +476,7 @@ async def change_my_password(
         raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta")
 
     current_user.password_hash = get_password_hash(payload.new_password)
+    current_user.updated_at = datetime.utcnow()
     _create_access_log(
         db,
         user=current_user,
