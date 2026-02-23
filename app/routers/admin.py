@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from app.database import get_db
 from app.models import AccessEventType, AccessLog, User, UserRole
@@ -279,4 +280,39 @@ async def get_logs_user(user_id: str, db: Session = Depends(get_db)):
             "rol": _role_label(user.role),
         },
         "data": logs,
+    }
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+from fastapi import Depends
+
+from app.database import get_db
+from app.models import User
+
+@router.get("/userStats")
+async def get_user_stats(db: Session = Depends(get_db)):
+    total_users = db.query(func.count(User.id)).scalar()
+
+    users_by_month = (
+        db.query(
+            func.to_char(
+                func.date_trunc("month", User.created_at),
+                "YYYY-MM"
+            ).label("month"),
+            func.count(User.id).label("count")
+        )
+        .group_by("month")
+        .order_by("month")
+        .all()
+    )
+
+    return {
+        "total_users": total_users,
+        "users_by_month": [
+            {
+                "month": row.month,
+                "count": row.count
+            }
+            for row in users_by_month
+        ]
     }
