@@ -1,3 +1,4 @@
+﻿import os
 from typing import Optional
 from uuid import UUID, uuid4
 
@@ -8,6 +9,18 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import AccessEventType, AccessLog, AdminAuditLog, User, UserRole
 from app.security import decode_access_token, get_password_hash
+
+# Mantiene la validacion introducida en main para evitar despliegues inseguros.
+ENV = os.getenv("ENV", "dev").strip().lower()
+ADMIN_TOKEN_GUARD_ENABLED = os.getenv("ADMIN_TOKEN_GUARD_ENABLED", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
+if ENV in {"prod", "production"} and not ADMIN_TOKEN_GUARD_ENABLED:
+    raise RuntimeError("ADMIN_TOKEN_GUARD_ENABLED debe estar en true en produccion.")
+
 
 ROLE_TO_TYPE = {
     UserRole.user: 1,
@@ -54,10 +67,24 @@ def _user_type_by_role(role: UserRole | None):
     return ROLE_TO_TYPE.get(role or UserRole.user, 1)
 
 
+def _latest_login_date(db: Session, user_id: UUID):
+    latest_access = (
+        db.query(AccessLog)
+        .filter(
+            AccessLog.user_id == user_id,
+            AccessLog.event_type == AccessEventType.LOGIN_SUCCESS,
+        )
+        .order_by(AccessLog.created_at.desc())
+        .first()
+    )
+    return latest_access.created_at.strftime("%d/%m/%Y") if latest_access else "-"
+
+
 def _serialize_user_payload(user: User):
     role_value = user.role.value if user.role else UserRole.user.value
     return {
         "id": str(user.id),
+        "nombre": user.full_name,
         "name": user.full_name,
         "full_name": user.full_name,
         "email": user.email,
@@ -253,29 +280,6 @@ async def add_user(
     }
 
 
-@router.get("/{user_id}")
-async def get_user(
-    user_id: str,
-    actor: User = Depends(verify_admin_token),
-    db: Session = Depends(get_db),
-):
-    try:
-        user_uuid = UUID(user_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"msg": "User id invalido"}) from exc
-
-    user = db.query(User).filter(User.id == user_uuid).first()
-    if not user:
-        raise HTTPException(status_code=404, detail={"msg": "User id no encontrado"})
-
-    _ensure_can_view_user(actor, user)
-
-    return {
-        "msg": "",
-        "data": _serialize_user_payload(user),
-    }
-
-
 @router.get("/")
 async def get_users(
     user_type: Optional[int] = Query(default=None, ge=1, le=4),
@@ -293,17 +297,6 @@ async def get_users(
         if actor.role == UserRole.admin and user.role != UserRole.user:
             continue
 
-        latest_access = (
-            db.query(AccessLog)
-            .filter(
-                AccessLog.user_id == user.id,
-                AccessLog.event_type == AccessEventType.LOGIN_SUCCESS,
-            )
-            .order_by(AccessLog.created_at.desc())
-            .first()
-        )
-        last_access = latest_access.created_at.strftime("%d/%m/%Y") if latest_access else "-"
-
         data.append(
             {
                 "id": str(user.id),
@@ -312,13 +305,165 @@ async def get_users(
                 "full_name": user.full_name,
                 "email": user.email,
                 "rol": _role_label(user.role),
-                "ultimoAcceso": last_access,
+                "ultimoAcceso": _latest_login_date(db, user.id),
                 "type": current_type,
                 "role_value": user.role.value if user.role else UserRole.user.value,
             }
         )
 
     return {"msg": "", "data": data}
+
+
+@router.get("/email/{email}")
+async def get_user_by_email(
+    email: str,
+    actor: User = Depends(verify_admin_token),
+    db: Session = Depends(get_db),
+):
+    email_buscado = email.lower().strip()
+
+    user = db.query(User).filter(User.email == email_buscado).first()
+    if not user:
+        raise HTTPException(status_code=404, detail={"msg": "Usuario no encontrado con ese email"})
+
+    _ensure_can_view_user(actor, user)
+
+    payload = _serialize_user_payload(user)
+    payload["ultimoAcceso"] = _latest_login_date(db, user.id)
+
+    return {
+        "msg": "",
+        "data": payload,
+    }
+
+
+@router.get("/auditoria/admin")
+async def get_admin_audit_logs(
+    action: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    actor: User = Depends(verify_admin_token),
+    db: Session = Depends(get_db),
+):
+    if actor.role not in {UserRole.owner, UserRole.auditor}:
+        raise HTTPException(
+            status_code=403,
+            detail={"msg": "Solo Owner o Auditor pueden ver la auditoria administrativa"},
+        )
+
+    query = db.query(AdminAuditLog).order_by(AdminAuditLog.created_at.desc())
+    if action:
+        query = query.filter(AdminAuditLog.action == action.strip().upper())
+
+    logs_db = query.limit(limit).all()
+    users = db.query(User).all()
+    users_by_id = {str(user.id): user for user in users}
+
+    data = []
+    for log in logs_db:
+        actor_user = users_by_id.get(str(log.actor_user_id))
+        target_user = users_by_id.get(str(log.target_user_id)) if log.target_user_id else None
+        data.append(
+            {
+                "id": str(log.id),
+                "accion": log.action,
+                "detalle": log.details or "",
+                "fecha": log.created_at.strftime("%d/%m/%Y") if log.created_at else "-",
+                "hora": log.created_at.strftime("%H:%M") if log.created_at else "-",
+                "actor": {
+                    "id": str(log.actor_user_id),
+                    "nombre": actor_user.full_name if actor_user else "-",
+                    "email": actor_user.email if actor_user else "-",
+                },
+                "target": (
+                    {
+                        "id": str(log.target_user_id),
+                        "nombre": target_user.full_name if target_user else "-",
+                        "email": target_user.email if target_user else "-",
+                    }
+                    if log.target_user_id
+                    else None
+                ),
+                "ip": log.ip_address or "-",
+                "web_agent": log.web_agent or "Desconocido",
+            }
+        )
+
+    return {"msg": "", "data": data}
+
+
+@router.get("/auditoria/usuario/{user_id}")
+async def get_logs_user(
+    user_id: str,
+    actor: User = Depends(verify_admin_token),
+    db: Session = Depends(get_db),
+):
+    try:
+        user_uuid = UUID(user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"msg": "User id invalido"}) from exc
+
+    user = db.query(User).filter(User.id == user_uuid).first()
+    if not user:
+        raise HTTPException(status_code=404, detail={"msg": "User id no encontrado"})
+
+    _ensure_can_view_user(actor, user)
+
+    logs_db = (
+        db.query(AccessLog)
+        .filter(AccessLog.user_id == user_uuid)
+        .order_by(AccessLog.created_at.desc())
+        .all()
+    )
+
+    logs = []
+    for access in logs_db:
+        logs.append(
+            {
+                "ip": access.ip_address or "-",
+                "web_agent": access.web_agent or "Desconocido",
+                "fecha": access.created_at.strftime("%d/%m/%Y") if access.created_at else "-",
+                "hora": access.created_at.strftime("%H:%M") if access.created_at else "-",
+                "accion": access.event_type.value if access.event_type else "DESCONOCIDA",
+                "attempt_email": access.attempt_email,
+            }
+        )
+
+    return {
+        "msg": "",
+        "user": {
+            "id": str(user.id),
+            "nombre": user.full_name,
+            "email": user.email,
+            "rol": _role_label(user.role),
+        },
+        "data": logs,
+    }
+
+
+@router.get("/{user_id}")
+async def get_user(
+    user_id: str,
+    actor: User = Depends(verify_admin_token),
+    db: Session = Depends(get_db),
+):
+    try:
+        user_uuid = UUID(user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"msg": "User id invalido"}) from exc
+
+    user = db.query(User).filter(User.id == user_uuid).first()
+    if not user:
+        raise HTTPException(status_code=404, detail={"msg": "User id no encontrado"})
+
+    _ensure_can_view_user(actor, user)
+
+    payload = _serialize_user_payload(user)
+    payload["ultimoAcceso"] = _latest_login_date(db, user.id)
+
+    return {
+        "msg": "",
+        "data": payload,
+    }
 
 
 @router.patch("/{user_id}")
@@ -419,106 +564,3 @@ async def delete_user(
     db.delete(user)
     db.commit()
     return {"msg": "User borrado correctamente."}
-
-
-@router.get("/auditoria/usuario/{user_id}")
-async def get_logs_user(
-    user_id: str,
-    actor: User = Depends(verify_admin_token),
-    db: Session = Depends(get_db),
-):
-    try:
-        user_uuid = UUID(user_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"msg": "User id invalido"}) from exc
-
-    user = db.query(User).filter(User.id == user_uuid).first()
-    if not user:
-        raise HTTPException(status_code=404, detail={"msg": "User id no encontrado"})
-
-    _ensure_can_view_user(actor, user)
-
-    logs_db = (
-        db.query(AccessLog)
-        .filter(AccessLog.user_id == user_uuid)
-        .order_by(AccessLog.created_at.desc())
-        .all()
-    )
-
-    logs = []
-    for access in logs_db:
-        logs.append(
-            {
-                "ip": access.ip_address or "-",
-                "web_agent": access.web_agent or "Desconocido",
-                "fecha": access.created_at.strftime("%d/%m/%Y") if access.created_at else "-",
-                "hora": access.created_at.strftime("%H:%M") if access.created_at else "-",
-                "accion": access.event_type.value if access.event_type else "DESCONOCIDA",
-                "attempt_email": access.attempt_email,
-            }
-        )
-
-    return {
-        "msg": "",
-        "user": {
-            "id": str(user.id),
-            "nombre": user.full_name,
-            "email": user.email,
-            "rol": _role_label(user.role),
-        },
-        "data": logs,
-    }
-
-
-@router.get("/auditoria/admin")
-async def get_admin_audit_logs(
-    action: Optional[str] = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
-    actor: User = Depends(verify_admin_token),
-    db: Session = Depends(get_db),
-):
-    if actor.role not in {UserRole.owner, UserRole.auditor}:
-        raise HTTPException(
-            status_code=403,
-            detail={"msg": "Solo Owner o Auditor pueden ver la auditoria administrativa"},
-        )
-
-    query = db.query(AdminAuditLog).order_by(AdminAuditLog.created_at.desc())
-    if action:
-        query = query.filter(AdminAuditLog.action == action.strip().upper())
-
-    logs_db = query.limit(limit).all()
-    users = db.query(User).all()
-    users_by_id = {str(user.id): user for user in users}
-
-    data = []
-    for log in logs_db:
-        actor_user = users_by_id.get(str(log.actor_user_id))
-        target_user = users_by_id.get(str(log.target_user_id)) if log.target_user_id else None
-        data.append(
-            {
-                "id": str(log.id),
-                "accion": log.action,
-                "detalle": log.details or "",
-                "fecha": log.created_at.strftime("%d/%m/%Y") if log.created_at else "-",
-                "hora": log.created_at.strftime("%H:%M") if log.created_at else "-",
-                "actor": {
-                    "id": str(log.actor_user_id),
-                    "nombre": actor_user.full_name if actor_user else "-",
-                    "email": actor_user.email if actor_user else "-",
-                },
-                "target": (
-                    {
-                        "id": str(log.target_user_id),
-                        "nombre": target_user.full_name if target_user else "-",
-                        "email": target_user.email if target_user else "-",
-                    }
-                    if log.target_user_id
-                    else None
-                ),
-                "ip": log.ip_address or "-",
-                "web_agent": log.web_agent or "Desconocido",
-            }
-        )
-
-    return {"msg": "", "data": data}

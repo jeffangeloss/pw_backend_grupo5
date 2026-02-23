@@ -1,4 +1,4 @@
-from fastapi import Depends, APIRouter, BackgroundTasks, HTTPException
+from fastapi import Depends, APIRouter, BackgroundTasks, HTTPException, Request
 from sqlalchemy.orm import Session
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
 import datetime
@@ -6,38 +6,115 @@ import uuid
 import os
 
 from ..security import get_password_hash
-from ..schemas import ResetForm
+from ..schemas import ResetForm, ResetRequest
 from ..database import get_db
-from ..models import User
+from ..models import AccessEventType, AccessLog, User
 
+# se ha copiado estos metodos del main para evitar imports circulares
+# idealmente, refactorizar estos metodos en su propio module 
+
+def _extract_client_ip(request: Request):
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "0.0.0.0"
+
+
+def _extract_browser_from_sec_ch_ua(sec_ch_ua: str | None):
+    raw = (sec_ch_ua or "").lower()
+    if not raw:
+        return None
+    if "brave" in raw:
+        return "Brave"
+    if "edg" in raw or "edge" in raw:
+        return "Edge"
+    if "opr" in raw or "opera" in raw:
+        return "Opera"
+    if "firefox" in raw:
+        return "Firefox"
+    if "safari" in raw and "chrom" not in raw:
+        return "Safari"
+    if "chrom" in raw:
+        return "Chrome"
+    return None
+
+
+def _extract_web_agent(request: Request):
+    explicit_browser = (request.headers.get("x-browser-name") or "").strip()
+    if explicit_browser:
+        return explicit_browser[:255]
+
+    browser_from_hint = _extract_browser_from_sec_ch_ua(request.headers.get("sec-ch-ua"))
+    if browser_from_hint:
+        return browser_from_hint
+
+    user_agent = (request.headers.get("user-agent") or "").strip()
+    if user_agent:
+        return user_agent[:255]
+    return "Desconocido"
+
+def _create_access_log(
+    db: Session,
+    *,
+    user: User | None,
+    event_type: AccessEventType,
+    attempt_email: str,
+    request: Request,
+):
+    log = AccessLog(
+        user_id=user.id if user else None,
+        event_type=event_type,
+        attempt_email=attempt_email,
+        ip_address=_extract_client_ip(request),
+        web_agent=_extract_web_agent(request),
+    )
+    db.add(log)
 
 router = APIRouter(
     prefix="/reset-pass",
     tags = ["PassReset"]
 )
 
-#configuracion para envio de email
-conf = ConnectionConfig(
-    MAIL_USERNAME = os.getenv("SENDER_EMAIL"),
-    MAIL_PASSWORD = os.getenv("SENDER_PASSWORD"),
-    MAIL_FROM = os.getenv("SENDER_EMAIL"),
-    MAIL_PORT = 587,
-    MAIL_SERVER = "smtp.gmail.com",
-    MAIL_STARTTLS=True,
-    MAIL_SSL_TLS=False,
-    USE_CREDENTIALS=True
-)
+def _build_mail_config():
+    sender_email = os.getenv("SENDER_EMAIL")
+    sender_password = os.getenv("SENDER_PASSWORD")
+    if not sender_email or not sender_password:
+        return None
+
+    return ConnectionConfig(
+        MAIL_USERNAME=sender_email,
+        MAIL_PASSWORD=sender_password,
+        MAIL_FROM=sender_email,
+        MAIL_PORT=587,
+        MAIL_SERVER="smtp.gmail.com",
+        MAIL_STARTTLS=True,
+        MAIL_SSL_TLS=False,
+        USE_CREDENTIALS=True,
+    )
 
 @router.put("/request")
-async def reset_pass_request( email : str, bg_tasks : BackgroundTasks,  db : Session = Depends(get_db) ):
-    db_query = db.query(User).filter(User.email == email)
-    db_usuario = db_query.first()
+async def reset_pass_request(
+    payload: ResetRequest,
+    request: Request,
+    bg_tasks : BackgroundTasks,
+    db : Session = Depends(get_db) ):
+
+    db_query = db.query(User).filter(User.email == payload.email)
+    db_user = db_query.first()
     token = str(uuid.uuid4())
-    if db_usuario:
+    if db_user:
         
         expires_at = datetime.datetime.now() + datetime.timedelta(minutes=15)
-        #db_access_log = crear access log
-        #db.add(db_access_log) y guardarlo en bd
+        _create_access_log(
+            db,
+            user=db_user,
+            event_type=AccessEventType.PASSWORD_RESET_REQUEST,
+            attempt_email=db_user.email,
+            request=request,
+            )
+        
         db_query.update({
             "token_pass" : token,
             "token_pass_expires" : expires_at
@@ -56,22 +133,26 @@ async def reset_pass_request( email : str, bg_tasks : BackgroundTasks,  db : Ses
         """
         message = MessageSchema(
             subject="Restablecer contraseña",
-            recipients=[email],
+            recipients=[payload.email],
             body = html_content,
             subtype="html"
         )
 
-        fm = FastMail(conf)
-
-        bg_tasks.add_task(fm.send_message, message)
+        conf = _build_mail_config()
+        if conf:
+            fm = FastMail(conf)
+            bg_tasks.add_task(fm.send_message, message)
 
     return {
-        "msg" : "Se completo el request",
-        "DELETE" : token
+        "msg" : "Se completo el request"
     }
 
 @router.post("/confirm")
-async def reset_pass_confirm( form: ResetForm, db : Session = Depends(get_db) ):
+async def reset_pass_confirm(
+    form: ResetForm,
+    request: Request,
+    db : Session = Depends(get_db) ):
+
     db_user = db.query(User).filter(User.token_pass == form.token).first()
     if not db_user:
         raise HTTPException(
@@ -91,6 +172,14 @@ async def reset_pass_confirm( form: ResetForm, db : Session = Depends(get_db) ):
     db_user.password_hash = get_password_hash(form.password)
     db_user.token_pass = None
     db_user.token_pass_expires = None
+
+    _create_access_log(
+            db,
+            user=db_user,
+            event_type=AccessEventType.PASSWORD_RESET_SUCCESS,
+            attempt_email=db_user.email,
+            request=request,
+            )
 
     db.commit()
 
