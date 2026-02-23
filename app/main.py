@@ -13,7 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .database import get_db, session
-from .models import AccessEventType, AccessLog, User
+from .models import AccessEventType, AccessLog, User, UserRole
 from .routers import admin, expenses, resetPass
 from .security import (
     DUMMY_HASH,
