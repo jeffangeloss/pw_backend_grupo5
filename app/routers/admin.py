@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -124,12 +125,17 @@ def _add_admin_audit_log(
     action: str,
     request: Request,
     target_user_id: UUID | None = None,
+    target_user: User | None = None,
     details: str | None = None,
 ):
+    resolved_target_id = target_user_id or (target_user.id if target_user else None)
     db.add(
         AdminAuditLog(
             actor_user_id=actor.id,
-            target_user_id=target_user_id,
+            target_user_id=resolved_target_id,
+            target_snapshot_id=resolved_target_id,
+            target_snapshot_name=target_user.full_name if target_user else None,
+            target_snapshot_email=target_user.email if target_user else None,
             action=action,
             details=details,
             ip_address=_extract_client_ip(request),
@@ -268,7 +274,7 @@ async def add_user(
         actor=actor,
         action="USER_CREATE",
         request=request,
-        target_user_id=db_user.id,
+        target_user=db_user,
         details=f"role={db_user.role.value}",
     )
 
@@ -363,6 +369,19 @@ async def get_admin_audit_logs(
     for log in logs_db:
         actor_user = users_by_id.get(str(log.actor_user_id))
         target_user = users_by_id.get(str(log.target_user_id)) if log.target_user_id else None
+        target_id = (
+            str(log.target_snapshot_id)
+            if log.target_snapshot_id
+            else (str(log.target_user_id) if log.target_user_id else None)
+        )
+        target_name = log.target_snapshot_name or (target_user.full_name if target_user else "-")
+        target_email = log.target_snapshot_email or (target_user.email if target_user else "-")
+        has_target = bool(
+            target_id
+            or log.target_snapshot_name
+            or log.target_snapshot_email
+            or log.target_user_id
+        )
         data.append(
             {
                 "id": str(log.id),
@@ -377,11 +396,11 @@ async def get_admin_audit_logs(
                 },
                 "target": (
                     {
-                        "id": str(log.target_user_id),
-                        "nombre": target_user.full_name if target_user else "-",
-                        "email": target_user.email if target_user else "-",
+                        "id": target_id or "-",
+                        "nombre": target_name,
+                        "email": target_email,
                     }
-                    if log.target_user_id
+                    if has_target
                     else None
                 ),
                 "ip": log.ip_address or "-",
@@ -520,7 +539,7 @@ async def update_user(
         actor=actor,
         action="USER_UPDATE",
         request=request,
-        target_user_id=user.id,
+        target_user=user,
         details=f"fields={','.join(changed_fields) if changed_fields else 'none'}",
     )
 
@@ -558,12 +577,19 @@ async def delete_user(
         actor=actor,
         action="USER_DELETE",
         request=request,
-        target_user_id=user.id,
+        target_user=user,
         details=f"deleted_role={user.role.value if user.role else UserRole.user.value}",
     )
 
     db.delete(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"msg": "No se puede eliminar el usuario porque tiene registros relacionados"},
+        ) from exc
     return {"msg": "User borrado correctamente."}
 
 
