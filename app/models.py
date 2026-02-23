@@ -66,7 +66,7 @@ class User(Base):
     created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
     updated_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
 
-    expenses = relationship("Expense", back_populates="user")
+    expenses = relationship("Expense", back_populates="user", cascade="all, delete-orphan")
     access_logs = relationship("AccessLog", back_populates="user")
 
 
@@ -123,7 +123,10 @@ class AdminAuditLog(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     actor_user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
-    target_user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=True)
+    target_user_id = Column(UUID(as_uuid=True), ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
+    target_snapshot_id = Column(UUID(as_uuid=True), nullable=True)
+    target_snapshot_name = Column(String(300), nullable=True)
+    target_snapshot_email = Column(String(100), nullable=True)
     action = Column(String(100), nullable=False)
     details = Column(Text, nullable=True)
 

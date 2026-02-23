@@ -1,4 +1,4 @@
-from contextlib import asynccontextmanager
+﻿from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from .database import get_db, session
 from .models import AccessEventType, AccessLog, User, UserRole
-from .routers import admin, expenses, resetPass
+from .routers import admin, expenses
 from .security import (
     DUMMY_HASH,
     create_access_token,
@@ -229,11 +229,6 @@ class RegisterRequest(BaseModel):
 
 class LogoutRequest(BaseModel):
     token: str = Field(..., min_length=8)
-
-
-class ChangePasswordRequest(BaseModel):
-    current_password: str = Field(..., min_length=8)
-    new_password: str = Field(..., min_length=8)
 
 
 class UpdateProfileRequest(BaseModel):
@@ -454,40 +449,6 @@ async def upload_my_avatar(
     }
 
 
-@app.patch("/me/password")
-async def change_my_password(
-    payload: ChangePasswordRequest,
-    request: Request,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    if payload.current_password == payload.new_password:
-        raise HTTPException(
-            status_code=400,
-            detail="La nueva contraseña debe ser diferente a la actual",
-        )
-
-    if is_password_hashed(current_user.password_hash):
-        password_ok = verify_password(payload.current_password, current_user.password_hash)
-    else:
-        password_ok = current_user.password_hash == payload.current_password
-
-    if not password_ok:
-        raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta")
-
-    current_user.password_hash = get_password_hash(payload.new_password)
-    current_user.updated_at = datetime.utcnow()
-    _create_access_log(
-        db,
-        user=current_user,
-        event_type=AccessEventType.PASSWORD_RESET_SUCCESS,
-        attempt_email=current_user.email,
-        request=request,
-    )
-    db.commit()
-    return {"msg": "Contraseña actualizada"}
-
-
 app.include_router(admin.router)
 app.include_router(expenses.router)
-app.include_router(resetPass.router)
+
