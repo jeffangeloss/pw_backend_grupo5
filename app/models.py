@@ -44,6 +44,7 @@ class User(Base):
     full_name = Column(String(300), nullable=False)
     email = Column(String(100), nullable=False, unique=True)
     password_hash = Column(String(300), nullable=False)
+    avatar_url = Column(String(2000), nullable=True)
 
     role = Column(
         Enum(UserRole, name="user_role"),
