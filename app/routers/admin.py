@@ -3,7 +3,7 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -23,7 +23,7 @@ if ENV in {"prod", "production"} and not ADMIN_TOKEN_GUARD_ENABLED:
 
 class UserCreate(BaseModel):
     full_name: str
-    email: str
+    email: EmailStr
     password: str
     type: int = Field(..., ge=1, le=2)
 
@@ -101,7 +101,7 @@ async def add_user(user: UserCreate, db: Session = Depends(get_db)):
             "id": str(db_user.id),
             "name": db_user.full_name,
             "email": db_user.email,
-            "type": db_user.role,
+            "type": _user_type_by_role(db_user.role),
         },
     }
 
@@ -123,7 +123,7 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
             "id": str(user.id),
             "name": user.full_name,
             "email": user.email,
-            "type": user.role,
+            "type": _user_type_by_role(db_user.role),
         },
     }
 
