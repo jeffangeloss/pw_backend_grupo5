@@ -156,6 +156,26 @@ async def get_expenses(
         "data": [_serialize_expense(expense) for expense in expenses_list],
     }
 
+
+@router.get("/categories")
+async def get_expense_categories(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    categories = (
+        db.query(Category.id, Category.name)
+        .join(Expense, Expense.category_id == Category.id)
+        .filter(Expense.user_id == current_user.id)
+        .distinct()
+        .order_by(Category.name.asc())
+        .all()
+    )
+
+    return {
+        "msg": "",
+        "data": [{"id": str(category.id), "name": category.name} for category in categories],
+    }
+
 @router.put("/{expense_id}")
 async def update_expense(
     expense_id: UUID,

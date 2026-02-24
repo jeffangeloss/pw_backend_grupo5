@@ -297,6 +297,11 @@ class UpdateProfileRequest(BaseModel):
     avatar_url: Optional[str] = Field(default=None, max_length=2000)
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=300)
+    new_password: str = Field(..., min_length=1, max_length=300)
+
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 
@@ -474,6 +479,49 @@ async def update_my_profile(
         "msg": "Perfil actualizado",
         "user": _serialize_user(current_user),
     }
+
+
+@app.patch("/me/password")
+async def change_my_password(
+    payload: ChangePasswordRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    current_password = payload.current_password
+    new_password = payload.new_password
+
+    if current_password == new_password:
+        raise HTTPException(
+            status_code=400,
+            detail="La nueva contrasena debe ser diferente a la actual",
+        )
+
+    try:
+        ensure_password_policy(new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if is_password_hashed(current_user.password_hash):
+        password_ok = verify_password(current_password, current_user.password_hash)
+    else:
+        password_ok = current_user.password_hash == current_password
+
+    if not password_ok:
+        raise HTTPException(status_code=400, detail="La contrasena actual es incorrecta")
+
+    current_user.password_hash = get_password_hash(new_password)
+    current_user.updated_at = datetime.utcnow()
+    _create_access_log(
+        db,
+        user=current_user,
+        event_type=AccessEventType.PASSWORD_RESET_SUCCESS,
+        attempt_email=current_user.email,
+        request=request,
+    )
+    db.commit()
+
+    return {"msg": "Contrasena actualizada"}
 
 
 @app.post("/me/avatar")
