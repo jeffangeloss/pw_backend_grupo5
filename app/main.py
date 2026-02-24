@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Uplo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, EmailStr, Field
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -214,17 +214,20 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 
 class LoginRequest(BaseModel):
-    # BLOQUE LOGIN: mantenemos username para frontend actual.
-    username: Optional[str] = Field(default=None, min_length=5)
-    # BLOQUE COMPAT: tambien acepta "correo" para clientes antiguos.
-    correo: Optional[str] = Field(default=None, min_length=5)
-    password: str = Field(..., min_length=8)
+    # Campo canonico de login: email.
+    # Compatibilidad: tambien acepta payloads legacy con "correo" o "username".
+    email: EmailStr = Field(
+        ...,
+        max_length=100,
+        validation_alias=AliasChoices("email", "correo", "username"),
+    )
+    password: str = Field(..., min_length=8, max_length=300)
 
 
 class RegisterRequest(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=300)
-    email: EmailStr
-    password: str = Field(..., min_length=8)
+    email: EmailStr = Field(..., max_length=100)
+    password: str = Field(..., min_length=8, max_length=300)
 
 
 class LogoutRequest(BaseModel):
@@ -233,7 +236,7 @@ class LogoutRequest(BaseModel):
 
 class UpdateProfileRequest(BaseModel):
     full_name: Optional[str] = Field(default=None, min_length=1, max_length=300)
-    email: Optional[EmailStr] = None
+    email: Optional[EmailStr] = Field(default=None, max_length=100)
     avatar_url: Optional[str] = Field(default=None, max_length=2000)
 
 
@@ -272,11 +275,9 @@ async def register(register_request: RegisterRequest, db: Session = Depends(get_
 @app.post("/login")
 async def login(login_request: LoginRequest, request: Request, db: Session = Depends(get_db)):
     # BLOQUE LOGIN BD: validacion real contra tabla user en PostgreSQL.
-    username = (login_request.username or login_request.correo or "").strip().lower()
-    if not username:
-        raise HTTPException(status_code=400, detail="Username/correo requerido")
+    login_email = login_request.email.strip().lower()
 
-    user = db.query(User).filter(User.email == username).first()
+    user = db.query(User).filter(User.email == login_email).first()
 
     if not user:
         verify_password(login_request.password, DUMMY_HASH)
@@ -284,7 +285,7 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
             db,
             user=None,
             event_type=AccessEventType.LOGIN_FAIL,
-            attempt_email=username,
+            attempt_email=login_email,
             request=request,
         )
         db.commit()
@@ -303,7 +304,7 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
             db,
             user=user,
             event_type=AccessEventType.LOGIN_FAIL,
-            attempt_email=username,
+            attempt_email=login_email,
             request=request,
         )
         db.commit()
