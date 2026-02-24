@@ -1,15 +1,6 @@
 -- Demo seed data for local presentations and end-to-end validation.
 -- Requires schema up to Alembic head (includes roles owner/auditor and admin_audit_log).
---
--- Demo credentials (plaintext on purpose for local demo):
---   demo.owner@finanzas.pe   / OwnerDemo2026!
---   demo.admin@finanzas.pe   / AdminDemo2026!
---   demo.auditor@finanzas.pe / AuditorDemo2026!
---   demo.user1@finanzas.pe   / UserDemo2026!
---   demo.user2@finanzas.pe   / UserDemo2026!
---   demo.user3@finanzas.pe   / UserDemo2026!
---
--- Note: main.py already migrates plaintext passwords to Argon2 on startup.
+-- Passwords are stored as Argon2 hashes to avoid committing plaintext credentials.
 
 BEGIN;
 
@@ -34,7 +25,7 @@ VALUES
     '10000000-0000-0000-0000-000000000001',
     'Owner Demo',
     'demo.owner@finanzas.pe',
-    'OwnerDemo2026!',
+    '$argon2id$v=19$m=65536,t=3,p=4$/0LUfMpA/Aakb9Yftdnzkw$GPVSYG+VPpmzw0jZ5EmSY9rqc8TQvC8OSwFkKvarjYc',
     '/uploads/avatars/demo-owner.png',
     'owner'::user_role,
     NULL,
@@ -50,7 +41,7 @@ VALUES
     '10000000-0000-0000-0000-000000000002',
     'Admin Demo',
     'demo.admin@finanzas.pe',
-    'AdminDemo2026!',
+    '$argon2id$v=19$m=65536,t=3,p=4$/0LUfMpA/Aakb9Yftdnzkw$GPVSYG+VPpmzw0jZ5EmSY9rqc8TQvC8OSwFkKvarjYc',
     '/uploads/avatars/demo-admin.png',
     'admin'::user_role,
     NULL,
@@ -66,7 +57,7 @@ VALUES
     '10000000-0000-0000-0000-000000000003',
     'Auditor Demo',
     'demo.auditor@finanzas.pe',
-    'AuditorDemo2026!',
+    '$argon2id$v=19$m=65536,t=3,p=4$/0LUfMpA/Aakb9Yftdnzkw$GPVSYG+VPpmzw0jZ5EmSY9rqc8TQvC8OSwFkKvarjYc',
     '/uploads/avatars/demo-auditor.png',
     'auditor'::user_role,
     NULL,
@@ -82,7 +73,7 @@ VALUES
     '10000000-0000-0000-0000-000000000004',
     'Gaby User Demo',
     'demo.user1@finanzas.pe',
-    'UserDemo2026!',
+    '$argon2id$v=19$m=65536,t=3,p=4$/0LUfMpA/Aakb9Yftdnzkw$GPVSYG+VPpmzw0jZ5EmSY9rqc8TQvC8OSwFkKvarjYc',
     '/uploads/avatars/demo-user1.png',
     'user'::user_role,
     'seed-reset-token-demo-user1',
@@ -98,7 +89,7 @@ VALUES
     '10000000-0000-0000-0000-000000000005',
     'Mariel User Demo',
     'demo.user2@finanzas.pe',
-    'UserDemo2026!',
+    '$argon2id$v=19$m=65536,t=3,p=4$/0LUfMpA/Aakb9Yftdnzkw$GPVSYG+VPpmzw0jZ5EmSY9rqc8TQvC8OSwFkKvarjYc',
     '/uploads/avatars/demo-user2.png',
     'user'::user_role,
     NULL,
@@ -114,7 +105,7 @@ VALUES
     '10000000-0000-0000-0000-000000000006',
     'Jeff User Demo',
     'demo.user3@finanzas.pe',
-    'UserDemo2026!',
+    '$argon2id$v=19$m=65536,t=3,p=4$/0LUfMpA/Aakb9Yftdnzkw$GPVSYG+VPpmzw0jZ5EmSY9rqc8TQvC8OSwFkKvarjYc',
     '/uploads/avatars/demo-user3.png',
     'user'::user_role,
     NULL,
@@ -125,6 +116,70 @@ VALUES
     true,
     '2026-02-14 16:30:00',
     '2026-02-24 09:50:00'
+),
+(
+    '3f695099-1016-4b59-a027-f7e28da0f265',
+    'Usuario Demo',
+    'ejemplo@user.com',
+    '$argon2id$v=19$m=65536,t=3,p=4$lcOx2xcOv/reQXAF3VXilw$Cb+DdfU31Jip2x5LFjYc1lPzrcxjxtD1UNcKAMVUrf0',
+    NULL,
+    'user'::user_role,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    true,
+    true,
+    '2025-11-01 09:00:00',
+    '2026-02-24 10:00:00'
+),
+(
+    '7f9db8dc-b088-4731-9dd0-2a70e721c822',
+    'Admin Demo',
+    'ejemplo@admin.com',
+    '$argon2id$v=19$m=65536,t=3,p=4$7MsLqdosXJphqkqGlw7HQA$z1BHKiljeIEQa5Jh3mTe+RIuxKtWmHd7jcms7m4CZPQ',
+    NULL,
+    'admin'::user_role,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    true,
+    true,
+    '2025-11-01 09:10:00',
+    '2026-02-24 10:10:00'
+),
+(
+    '80b44d36-f154-4a08-8cb7-1eec0204cb59',
+    'Owner Demo',
+    'ejemplo@owner.com',
+    '$argon2id$v=19$m=65536,t=3,p=4$7MsLqdosXJphqkqGlw7HQA$z1BHKiljeIEQa5Jh3mTe+RIuxKtWmHd7jcms7m4CZPQ',
+    NULL,
+    'owner'::user_role,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    true,
+    true,
+    '2025-11-01 09:20:00',
+    '2026-02-24 10:20:00'
+),
+(
+    'a7e2e064-0358-4688-8a24-080e6d024920',
+    'Auditor Demo',
+    'ejemplo@auditor.com',
+    '$argon2id$v=19$m=65536,t=3,p=4$7MsLqdosXJphqkqGlw7HQA$z1BHKiljeIEQa5Jh3mTe+RIuxKtWmHd7jcms7m4CZPQ',
+    NULL,
+    'auditor'::user_role,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    true,
+    true,
+    '2025-11-01 09:30:00',
+    '2026-02-24 10:30:00'
 )
 ON CONFLICT (email) DO UPDATE
 SET
