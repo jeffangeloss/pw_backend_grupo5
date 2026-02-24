@@ -8,6 +8,7 @@ import os
 from ..database import get_db
 from ..models import User
 from ..security import get_password_hash
+from ..schemas import VerifRequest, TokenRequest
 
 router = APIRouter(
     prefix="/mailverif",
@@ -33,10 +34,11 @@ def _build_mail_config():
 
 @router.post("/send")
 async def send_verification_email(
-    email: str,
+    request: VerifRequest,
     bg_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
+    email = request.email
     user = db.query(User).filter(User.email == email).first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -53,7 +55,6 @@ async def send_verification_email(
     # Construir link de verificación
     link = f"http://localhost:5173/#/verificar-email?token={token}"
 
-    # Contenido HTML del correo
     html_content = f"""
     <!DOCTYPE html>
     <html lang="es">
@@ -72,31 +73,34 @@ async def send_verification_email(
                 <h1 style="margin:0 0 32px 0;font-size:32px;letter-spacing:2px;color:#0b3aa4;">
                     GRUPO 5
                 </h1>
+
                 <h2 style="margin:0 0 16px 0;font-size:22px;color:#3f3f46;">
                     CONFIRMA TU CORREO
                 </h2>
-                <p style="margin:0 0 24px 0;font-size:15px;line-height:1.5;color:#18181b;">
-                    Gracias por registrarte. Haz clic en el siguiente botón para activar tu cuenta:
-                </p>
-                
-                <!-- Botón con link del token -->
-                <a href="{link}" 
-                    style="
-                    display:inline-block;
-                    margin:0 0 24px 0;
-                    padding:16px 24px;
-                    background:#4f46e5;
-                    color:white;
-                    text-decoration:none;
-                    border-radius:8px;
-                    font-weight:bold;
-                    font-size:16px;
-                    ">
-                    Verificar correo
-                </a>
 
-                <p style="margin:0 0 4px 0;font-size:14px;color:#18181b;">
-                    Este enlace expira en 24 horas.
+                <p style="margin:0 0 24px 0;font-size:15px;line-height:1.5;color:#18181b;">
+                    Gracias por registrarte. Usa el siguiente código para confirmar tu cuenta:
+                </p>
+
+                <!-- TOKEN -->
+                <div style="
+                    margin:0 0 24px 0;
+                    padding:16px;
+                    border:2px dashed #64748b;
+                    font-size:28px;
+                    font-weight:bold;
+                    letter-spacing:4px;
+                    color:#1e293b;
+                ">
+                    {token}
+                </div>
+
+                <p style="margin:0 0 8px 0;font-size:14px;color:#18181b;">
+                    Ingresa este código en la pantalla de verificación.
+                </p>
+
+                <p style="margin:0 0 24px 0;font-size:14px;color:#18181b;">
+                    El código expira en 24 horas.
                 </p>
 
                 <p style="margin:0;font-size:12px;color:#a1a1aa;line-height:1.4;">
@@ -106,6 +110,7 @@ async def send_verification_email(
                 </td>
             </tr>
             </table>
+
         </td>
         </tr>
     </table>
@@ -129,10 +134,9 @@ async def send_verification_email(
     return {"msg": "Correo de verificación enviado"}
 
 @router.post("/confirm")
-async def confirm_email(token: str, db: Session = Depends(get_db)):
-    """
-    Confirma el correo de un usuario usando el token de verificación.
-    """
+async def confirm_email(body: TokenRequest, db: Session = Depends(get_db)):
+    token = body.token
+    
     user = db.query(User).filter(User.token_verification == token).first()
     if not user:
         raise HTTPException(status_code=400, detail="Token inválido")
