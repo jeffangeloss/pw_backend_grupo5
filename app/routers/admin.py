@@ -109,6 +109,34 @@ def _serialize_user_payload(user: User):
     }
 
 
+def _build_user_stats_payload(db: Session):
+    total_users = db.query(func.count(User.id)).scalar()
+
+    users_by_month = (
+        db.query(
+            func.to_char(
+                func.date_trunc("month", User.created_at),
+                "YYYY-MM",
+            ).label("month"),
+            func.count(User.id).label("count"),
+        )
+        .group_by("month")
+        .order_by("month")
+        .all()
+    )
+
+    return {
+        "total_users": total_users,
+        "users_by_month": [
+            {
+                "month": row.month,
+                "count": row.count,
+            }
+            for row in users_by_month
+        ],
+    }
+
+
 def _resolve_admin_token(x_token: Optional[str], authorization: Optional[str]):
     if x_token:
         return x_token[7:].strip() if x_token.lower().startswith("bearer ") else x_token.strip()
@@ -430,31 +458,12 @@ async def get_admin_audit_logs(
 
 @router.get("/userStats", dependencies=[Depends(verify_admin_token)])
 async def get_user_stats(db: Session = Depends(get_db)):
-    total_users = db.query(func.count(User.id)).scalar()
+    return _build_user_stats_payload(db)
 
-    users_by_month = (
-        db.query(
-            func.to_char(
-                func.date_trunc("month", User.created_at),
-                "YYYY-MM"
-            ).label("month"),
-            func.count(User.id).label("count")
-        )
-        .group_by("month")
-        .order_by("month")
-        .all()
-    )
 
-    return {
-        "total_users": total_users,
-        "users_by_month": [
-            {
-                "month": row.month,
-                "count": row.count
-            }
-            for row in users_by_month
-        ]
-    }
+@router.get("/user_stats", dependencies=[Depends(verify_admin_token)])
+async def get_user_stats_snake_case(db: Session = Depends(get_db)):
+    return _build_user_stats_payload(db)
 
 
 @router.get("/auditoria/usuario/{user_id}")
@@ -640,32 +649,3 @@ async def delete_user(
             detail={"msg": "No se puede eliminar el usuario porque tiene registros relacionados"},
         ) from exc
     return {"msg": "User borrado correctamente."}
-
-
-@router.get("/user_stats")
-async def get_user_stats(db: Session = Depends(get_db)):
-    total_users = db.query(func.count(User.id)).scalar()
-
-    users_by_month = (
-        db.query(
-            func.to_char(
-                func.date_trunc("month", User.created_at),
-                "YYYY-MM"
-            ).label("month"),
-            func.count(User.id).label("count")
-        )
-        .group_by("month")
-        .order_by("month")
-        .all()
-    )
-
-    return {
-        "total_users": total_users,
-        "users_by_month": [
-            {
-                "month": row.month,
-                "count": row.count
-            }
-            for row in users_by_month
-        ]
-    }
