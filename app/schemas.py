@@ -3,7 +3,9 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, EmailStr, Field, field_validator
+
+from .password_policy import ensure_password_policy
 
 
 class LoginRequest(BaseModel):
@@ -28,6 +30,11 @@ class UserCreate(BaseModel):
     password: str = Field(..., min_length=8, max_length=300)
     type: int = Field(..., ge=1, le=4)
 
+    @field_validator("password")
+    @classmethod
+    def validate_password_policy(cls, value: str):
+        return ensure_password_policy(value)
+
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = Field(None, min_length=1, max_length=300)
@@ -35,12 +42,24 @@ class UserUpdate(BaseModel):
     password: Optional[str] = Field(None, min_length=8, max_length=300)
     type: Optional[int] = Field(None, ge=1, le=4)
 
+    @field_validator("password")
+    @classmethod
+    def validate_password_policy(cls, value: Optional[str]):
+        if value is None:
+            return value
+        return ensure_password_policy(value)
+
 class ResetRequest(BaseModel):
     email: EmailStr = Field(..., max_length=100)
 
 class ResetForm(BaseModel):
     token: str = Field(..., min_length=10, max_length=255)
     password: str = Field(..., min_length=8, max_length=300)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_policy(cls, value: str):
+        return ensure_password_policy(value)
 
 class ExpenseUpdate(BaseModel):
     amount: Optional[Decimal] = Field(default=None, gt=0, max_digits=15, decimal_places=2)

@@ -3,13 +3,14 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
 from app.models import AccessEventType, AccessLog, AdminAuditLog, User, UserRole
+from app.password_policy import ensure_password_policy
 from app.security import decode_access_token, get_password_hash
 
 # Mantiene la validacion introducida en main para evitar despliegues inseguros.
@@ -40,12 +41,24 @@ class UserCreate(BaseModel):
     password: str = Field(..., min_length=8, max_length=300)
     type: int = Field(..., ge=1, le=4)
 
+    @field_validator("password")
+    @classmethod
+    def validate_password_policy(cls, value: str):
+        return ensure_password_policy(value)
+
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = Field(default=None, min_length=1, max_length=300)
     email: Optional[EmailStr] = Field(default=None, max_length=100)
     password: Optional[str] = Field(default=None, min_length=8, max_length=300)
     type: Optional[int] = Field(None, ge=1, le=4)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_policy(cls, value: Optional[str]):
+        if value is None:
+            return value
+        return ensure_password_policy(value)
 
 
 def _role_by_type(user_type: int) -> UserRole:
