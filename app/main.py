@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Uplo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.staticfiles import StaticFiles
-from pydantic import AliasChoices, BaseModel, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -23,7 +23,8 @@ except Exception:
 
 from .database import get_db, session
 from .models import AccessEventType, AccessLog, User, UserRole
-from .routers import admin, expenses, resetPass, categories, mailVerif
+from .password_policy import ensure_password_policy
+from .routers import admin, expenses, resetPass, categories
 from .security import (
     DUMMY_HASH,
     create_access_token,
@@ -279,6 +280,11 @@ class RegisterRequest(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=300)
     email: EmailStr = Field(..., max_length=100)
     password: str = Field(..., min_length=8, max_length=300)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_policy(cls, value: str):
+        return ensure_password_policy(value)
 
 
 class LogoutRequest(BaseModel):
