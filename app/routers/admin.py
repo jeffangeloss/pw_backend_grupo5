@@ -629,3 +629,30 @@ async def delete_user(
     return {"msg": "User borrado correctamente."}
 
 
+@router.get("/user_stats")
+async def get_user_stats(db: Session = Depends(get_db)):
+    total_users = db.query(func.count(User.id)).scalar()
+
+    users_by_month = (
+        db.query(
+            func.to_char(
+                func.date_trunc("month", User.created_at),
+                "YYYY-MM"
+            ).label("month"),
+            func.count(User.id).label("count")
+        )
+        .group_by("month")
+        .order_by("month")
+        .all()
+    )
+
+    return {
+        "total_users": total_users,
+        "users_by_month": [
+            {
+                "month": row.month,
+                "count": row.count
+            }
+            for row in users_by_month
+        ]
+    }

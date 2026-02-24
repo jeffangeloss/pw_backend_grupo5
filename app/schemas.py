@@ -37,6 +37,12 @@ class UserUpdate(BaseModel):
 
 class ResetRequest(BaseModel):
     email: EmailStr = Field(..., max_length=100)
+    
+class VerifRequest(BaseModel):
+    email: EmailStr
+    
+class TokenRequest(BaseModel):
+    token: str
 
 class ResetForm(BaseModel):
     token: str = Field(..., min_length=10, max_length=255)
