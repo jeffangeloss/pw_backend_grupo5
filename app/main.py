@@ -347,6 +347,12 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
         )
         db.commit()
         raise HTTPException(status_code=400, detail="Credenciales incorrectas")
+    
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=403,
+            detail="Se debe verificar el correo antes de iniciar sesion"
+        )
 
     if is_password_hashed(user.password_hash):
         password_ok = verify_password(login_request.password, user.password_hash)
@@ -517,3 +523,4 @@ app.include_router(admin.router)
 app.include_router(expenses.router)
 app.include_router(resetPass.router)
 app.include_router(categories.router)
+app.include_router(mailVerif.router)
