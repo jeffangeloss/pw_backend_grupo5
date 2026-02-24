@@ -105,7 +105,7 @@ class AccessLog(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
     event_type = Column(Enum(AccessEventType, name="access_event_type"), nullable=False)
 
     attempt_email = Column(String(100), nullable=False)
