@@ -277,6 +277,12 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
         raise HTTPException(status_code=400, detail="Username/correo requerido")
 
     user = db.query(User).filter(User.email == username).first()
+    
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=403,
+            detail="Se debe verificar el correo antes de iniciar sesion"
+        )
 
     if not user:
         verify_password(login_request.password, DUMMY_HASH)
