@@ -24,7 +24,7 @@ except Exception:
 from .database import get_db, session
 from .models import AccessEventType, AccessLog, User, UserRole
 from .password_policy import ensure_password_policy
-from .routers import admin, expenses, resetPass, categories, mailVerif
+from .routers import admin, expenses, resetPass, categories, mailVerif, chatbot
 from .security import (
     DUMMY_HASH,
     create_access_token,
@@ -524,3 +524,4 @@ app.include_router(expenses.router)
 app.include_router(resetPass.router)
 app.include_router(categories.router)
 app.include_router(mailVerif.router)
+app.include_router(chatbot.router)
