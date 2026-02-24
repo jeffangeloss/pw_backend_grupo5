@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
+import os
+
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
@@ -11,6 +13,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import AliasChoices, BaseModel, EmailStr, Field
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+
+try:
+    import cloudinary
+    from cloudinary import uploader as cloudinary_uploader
+except Exception:
+    cloudinary = None
+    cloudinary_uploader = None
 
 from .database import get_db, session
 from .models import AccessEventType, AccessLog, User, UserRole
@@ -28,6 +37,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 UPLOADS_DIR = BASE_DIR / "uploads"
 AVATARS_DIR = UPLOADS_DIR / "avatars"
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
+CLOUDINARY_FOLDER = (os.getenv("CLOUDINARY_FOLDER") or "pw-backend-grupo5/avatars").strip()
 ALLOWED_AVATAR_EXTENSIONS = {
     ".png",
     ".jpg",
@@ -193,6 +203,47 @@ def _validate_avatar_extension(filename: str):
     if extension not in ALLOWED_AVATAR_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Formato de imagen no permitido")
     return extension
+
+
+def _configure_cloudinary():
+    if cloudinary is None:
+        return False
+
+    cloud_name = (os.getenv("CLOUDINARY_CLOUD_NAME") or "").strip()
+    api_key = (os.getenv("CLOUDINARY_API_KEY") or "").strip()
+    api_secret = (os.getenv("CLOUDINARY_API_SECRET") or "").strip()
+    if not cloud_name or not api_key or not api_secret:
+        return False
+    
+    cloudinary.config(
+        cloud_name=cloud_name,
+        api_key=api_key,
+        api_secret=api_secret,
+        secure=True,
+    )
+    return True
+
+
+def _upload_avatar_to_cloudinary(file_bytes: bytes, *, user_id: str):
+    if not _configure_cloudinary():
+        return None
+
+    try:
+        result = cloudinary_uploader.upload(
+            file_bytes,
+            resource_type="image",
+            folder=CLOUDINARY_FOLDER,
+            public_id=f"user-{user_id}-{uuid4().hex}",
+            overwrite=True,
+            invalidate=True,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="No se pudo subir la imagen a Cloudinary") from exc
+
+    avatar_url = (result.get("secure_url") or result.get("url") or "").strip()
+    if not avatar_url:
+        raise HTTPException(status_code=502, detail="Cloudinary no devolvio URL de imagen")
+    return avatar_url
 
 
 @asynccontextmanager
@@ -433,12 +484,18 @@ async def upload_my_avatar(
     if len(file_bytes) > MAX_AVATAR_BYTES:
         raise HTTPException(status_code=413, detail="La imagen excede el limite de 5MB")
 
-    safe_name = f"{uuid4().hex}{extension}"
-    destination = AVATARS_DIR / safe_name
-    with destination.open("wb") as out_file:
-        out_file.write(file_bytes)
-
-    current_user.avatar_url = f"/uploads/avatars/{safe_name}"
+    cloudinary_avatar_url = _upload_avatar_to_cloudinary(
+        file_bytes,
+        user_id=str(current_user.id),
+    )
+    if cloudinary_avatar_url:
+        current_user.avatar_url = cloudinary_avatar_url
+    else:
+        safe_name = f"{uuid4().hex}{extension}"
+        destination = AVATARS_DIR / safe_name
+        with destination.open("wb") as out_file:
+            out_file.write(file_bytes)
+        current_user.avatar_url = f"/uploads/avatars/{safe_name}"
     current_user.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(current_user)
