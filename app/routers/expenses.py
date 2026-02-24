@@ -23,9 +23,9 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 
 class ExpenseCreateRequest(BaseModel):
-    amount: Decimal = Field(..., gt=0)
+    amount: Decimal = Field(..., gt=0, max_digits=15, decimal_places=2)
     expense_date: date
-    description: str = Field(..., min_length=1, max_length=1000)
+    description: str = Field(..., min_length=1)
     category_name: str = Field(..., min_length=1, max_length=100)
 
 
@@ -89,12 +89,16 @@ async def create_expense(
         db.add(category)
         db.flush()
 
+    clean_description = payload.description.strip()
+    if not clean_description:
+        raise HTTPException(status_code=400, detail="Descripcion invalida")
+
     expense = Expense(
         user_id=current_user.id,
         category_id=category.id,
         amount=payload.amount,
         expense_date=datetime.combine(payload.expense_date, time.min),
-        description=payload.description.strip(),
+        description=clean_description,
     )
     db.add(expense)
     db.commit()
@@ -115,9 +119,15 @@ async def get_expenses(
     date_to: Optional[datetime] = Query(default=None),
     amount_min: Optional[float] = Query(default=None, ge=0),
     amount_max: Optional[float] = Query(default=None, ge=0),
-    order: Optional[str] = Query(default="desc"),
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
     db: Session = Depends(get_db),
 ):
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=400, detail="Rango de fechas invalido")
+
+    if amount_min is not None and amount_max is not None and amount_min > amount_max:
+        raise HTTPException(status_code=400, detail="Rango de montos invalido")
+
     query = (
         db.query(Expense)
         .options(joinedload(Expense.category))
@@ -166,17 +176,32 @@ async def update_expense(
             detail="Egreso no encontrado"
         )
     
-    if payload.amount != None:
+    has_changes = False
+
+    if payload.amount is not None:
         expense.amount = payload.amount
+        has_changes = True
     
-    if payload.category_id != None:
+    if payload.category_id is not None:
+        category = db.query(Category).filter(Category.id == payload.category_id).first()
+        if not category:
+            raise HTTPException(status_code=400, detail="Categoria no encontrada")
         expense.category_id = payload.category_id
+        has_changes = True
 
-    if payload.expense_date != None:
+    if payload.expense_date is not None:
         expense.expense_date = payload.expense_date
+        has_changes = True
 
-    if payload.description != None:
-        expense.description = payload.description
+    if payload.description is not None:
+        clean_description = payload.description.strip()
+        if not clean_description:
+            raise HTTPException(status_code=400, detail="Descripcion invalida")
+        expense.description = clean_description
+        has_changes = True
+
+    if not has_changes:
+        raise HTTPException(status_code=400, detail="No hay cambios para actualizar")
     
     expense.updated_at = datetime.utcnow()
     
@@ -190,7 +215,7 @@ async def update_expense(
 
 @router.delete("/{expense_id}")
 async def delete_expense(
-    expense_id: str,
+    expense_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -216,7 +241,7 @@ async def delete_expense(
 
 @router.get("/stats")
 async def get_expenses_stats(
-    year: Optional[int] = None,
+    year: Optional[int] = Query(default=None, ge=1900, le=9999),
     month: Optional[int] = Query(default=None, ge=1, le=12),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -258,17 +283,27 @@ async def get_expenses_stats(
     ]
 
     # total por categoria
+    category_query = (
+    db.query(
+        Category.name.label("category"),
+        func.sum(Expense.amount).label("total")
+    )
+    .join(Expense, Expense.category_id == Category.id)
+    .filter(Expense.user_id == current_user.id)
+    )
+
+    if year:
+        category_query = category_query.filter(extract("year", Expense.expense_date) == year)
+
+    if month:
+        category_query = category_query.filter(extract("month", Expense.expense_date) == month)
+
     category_rows = (
-        db.query(
-            Category.name.label("category"),
-            func.sum(Expense.amount).label("total")
-        )
-        .join(Expense, Expense.category_id == Category.id)
-        .filter(Expense.user_id == current_user.id)
+        category_query
         .group_by(Category.name)
         .order_by(func.sum(Expense.amount).desc())
         .all()
-    )
+        )
 
     by_category = [
         {
@@ -278,10 +313,44 @@ async def get_expenses_stats(
         for row in category_rows
     ]
 
+    # total por mes y categoria (para stacked bar)
+    monthly_category_rows = (
+        db.query(
+            extract("month", Expense.expense_date).label("month"),
+            Category.name.label("category"),
+            func.sum(Expense.amount).label("total")
+        )
+        .join(Category, Expense.category_id == Category.id)
+        .filter(Expense.user_id == current_user.id)
+    )
+
+    if year:
+        monthly_category_rows = monthly_category_rows.filter(extract("year", Expense.expense_date) == year)
+
+    if month:
+        monthly_category_rows = monthly_category_rows.filter(extract("month", Expense.expense_date) == month)
+
+    monthly_category_rows = (
+        monthly_category_rows
+        .group_by("month", Category.name)
+        .order_by("month")
+        .all()
+    )
+
+    monthly_by_category = [
+        {
+            "month": int(row.month),
+            "category": row.category,
+            "total": float(row.total)
+        }
+        for row in monthly_category_rows
+    ]
+
     return {
         "total": float(total_general or 0),
         "monthly": monthly,
-        "by_category": by_category
+        "by_category": by_category,
+        "monthly_by_category": monthly_by_category
     }
 
 

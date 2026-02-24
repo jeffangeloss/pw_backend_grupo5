@@ -101,7 +101,8 @@ async def reset_pass_request(
     bg_tasks : BackgroundTasks,
     db : Session = Depends(get_db) ):
 
-    db_query = db.query(User).filter(User.email == payload.email)
+    email = payload.email.strip().lower()
+    db_query = db.query(User).filter(User.email == email)
     db_user = db_query.first()
     token = str(uuid.uuid4())
     if db_user:
@@ -111,7 +112,7 @@ async def reset_pass_request(
             db,
             user=db_user,
             event_type=AccessEventType.PASSWORD_RESET_REQUEST,
-            attempt_email=db_user.email,
+            attempt_email=email,
             request=request,
             )
         
@@ -133,7 +134,7 @@ async def reset_pass_request(
         """
         message = MessageSchema(
             subject="Restablecer contraseña",
-            recipients=[payload.email],
+            recipients=[email],
             body = html_content,
             subtype="html"
         )
@@ -153,7 +154,8 @@ async def reset_pass_confirm(
     request: Request,
     db : Session = Depends(get_db) ):
 
-    db_user = db.query(User).filter(User.token_pass == form.token).first()
+    token = form.token.strip()
+    db_user = db.query(User).filter(User.token_pass == token).first()
     if not db_user:
         raise HTTPException(
             status_code=400,
@@ -186,4 +188,5 @@ async def reset_pass_confirm(
     return {
         "msg" : ""
     }
+
 
