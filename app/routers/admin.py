@@ -35,16 +35,16 @@ ADMIN_PANEL_ROLES = {UserRole.owner, UserRole.admin, UserRole.auditor}
 
 
 class UserCreate(BaseModel):
-    full_name: str
-    email: EmailStr
-    password: str
+    full_name: str = Field(..., min_length=1, max_length=300)
+    email: EmailStr = Field(..., max_length=100)
+    password: str = Field(..., min_length=8, max_length=300)
     type: int = Field(..., ge=1, le=4)
 
 
 class UserUpdate(BaseModel):
-    full_name: Optional[str] = None
-    email: Optional[EmailStr] = None
-    password: Optional[str] = None
+    full_name: Optional[str] = Field(default=None, min_length=1, max_length=300)
+    email: Optional[EmailStr] = Field(default=None, max_length=100)
+    password: Optional[str] = Field(default=None, min_length=8, max_length=300)
     type: Optional[int] = Field(None, ge=1, le=4)
 
 
@@ -259,9 +259,13 @@ async def add_user(
     if existing:
         raise HTTPException(status_code=400, detail={"msg": "Email ya registrado"})
 
+    full_name = user.full_name.strip()
+    if not full_name:
+        raise HTTPException(status_code=400, detail={"msg": "Nombre completo requerido"})
+
     db_user = User(
         id=uuid4(),
-        full_name=user.full_name.strip(),
+        full_name=full_name,
         email=email,
         password_hash=get_password_hash(user.password),
         role=new_role,
@@ -323,11 +327,11 @@ async def get_users(
 
 @router.get("/email/{email}")
 async def get_user_by_email(
-    email: str,
+    email: EmailStr,
     actor: User = Depends(verify_admin_token),
     db: Session = Depends(get_db),
 ):
-    email_buscado = email.lower().strip()
+    email_buscado = str(email).strip().lower()
 
     user = db.query(User).filter(User.email == email_buscado).first()
     if not user:
@@ -346,7 +350,7 @@ async def get_user_by_email(
 
 @router.get("/auditoria/admin")
 async def get_admin_audit_logs(
-    action: Optional[str] = Query(default=None),
+    action: Optional[str] = Query(default=None, max_length=100),
     limit: int = Query(default=100, ge=1, le=500),
     actor: User = Depends(verify_admin_token),
     db: Session = Depends(get_db),
@@ -409,6 +413,35 @@ async def get_admin_audit_logs(
         )
 
     return {"msg": "", "data": data}
+
+
+@router.get("/userStats", dependencies=[Depends(verify_admin_token)])
+async def get_user_stats(db: Session = Depends(get_db)):
+    total_users = db.query(func.count(User.id)).scalar()
+
+    users_by_month = (
+        db.query(
+            func.to_char(
+                func.date_trunc("month", User.created_at),
+                "YYYY-MM"
+            ).label("month"),
+            func.count(User.id).label("count")
+        )
+        .group_by("month")
+        .order_by("month")
+        .all()
+    )
+
+    return {
+        "total_users": total_users,
+        "users_by_month": [
+            {
+                "month": row.month,
+                "count": row.count
+            }
+            for row in users_by_month
+        ]
+    }
 
 
 @router.get("/auditoria/usuario/{user_id}")
@@ -511,7 +544,10 @@ async def update_user(
     changed_fields = []
 
     if updated_user.full_name is not None:
-        user.full_name = updated_user.full_name.strip()
+        clean_name = updated_user.full_name.strip()
+        if not clean_name:
+            raise HTTPException(status_code=400, detail={"msg": "Nombre completo requerido"})
+        user.full_name = clean_name
         changed_fields.append("full_name")
     if updated_user.email is not None:
         new_email = updated_user.email.strip().lower()
@@ -593,30 +629,3 @@ async def delete_user(
     return {"msg": "User borrado correctamente."}
 
 
-@router.get("/userStats")
-async def get_user_stats(db: Session = Depends(get_db)):
-    total_users = db.query(func.count(User.id)).scalar()
-
-    users_by_month = (
-        db.query(
-            func.to_char(
-                func.date_trunc("month", User.created_at),
-                "YYYY-MM"
-            ).label("month"),
-            func.count(User.id).label("count")
-        )
-        .group_by("month")
-        .order_by("month")
-        .all()
-    )
-
-    return {
-        "total_users": total_users,
-        "users_by_month": [
-            {
-                "month": row.month,
-                "count": row.count
-            }
-            for row in users_by_month
-        ]
-    }
