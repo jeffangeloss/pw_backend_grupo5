@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from .database import get_db, session
 from .models import AccessEventType, AccessLog, User, UserRole
-from .routers import admin, expenses, resetPass, categories
+from .routers import admin, expenses, resetPass, categories, mailVerif
 from .security import (
     DUMMY_HASH,
     create_access_token,
@@ -453,3 +453,4 @@ app.include_router(admin.router)
 app.include_router(expenses.router)
 app.include_router(resetPass.router)
 app.include_router(categories.router)
+app.include_router(mailVerif.router)
