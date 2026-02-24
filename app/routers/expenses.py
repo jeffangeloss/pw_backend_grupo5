@@ -259,17 +259,27 @@ async def get_expenses_stats(
     ]
 
     # total por categoria
+    category_query = (
+    db.query(
+        Category.name.label("category"),
+        func.sum(Expense.amount).label("total")
+    )
+    .join(Expense, Expense.category_id == Category.id)
+    .filter(Expense.user_id == current_user.id)
+    )
+
+    if year:
+        category_query = category_query.filter(extract("year", Expense.expense_date) == year)
+
+    if month:
+        category_query = category_query.filter(extract("month", Expense.expense_date) == month)
+
     category_rows = (
-        db.query(
-            Category.name.label("category"),
-            func.sum(Expense.amount).label("total")
-        )
-        .join(Expense, Expense.category_id == Category.id)
-        .filter(Expense.user_id == current_user.id)
+        category_query
         .group_by(Category.name)
         .order_by(func.sum(Expense.amount).desc())
         .all()
-    )
+        )
 
     by_category = [
         {
@@ -279,10 +289,44 @@ async def get_expenses_stats(
         for row in category_rows
     ]
 
+    # total por mes y categoria (para stacked bar)
+    monthly_category_rows = (
+        db.query(
+            extract("month", Expense.expense_date).label("month"),
+            Category.name.label("category"),
+            func.sum(Expense.amount).label("total")
+        )
+        .join(Category, Expense.category_id == Category.id)
+        .filter(Expense.user_id == current_user.id)
+    )
+
+    if year:
+        monthly_category_rows = monthly_category_rows.filter(extract("year", Expense.expense_date) == year)
+
+    if month:
+        monthly_category_rows = monthly_category_rows.filter(extract("month", Expense.expense_date) == month)
+
+    monthly_category_rows = (
+        monthly_category_rows
+        .group_by("month", Category.name)
+        .order_by("month")
+        .all()
+    )
+
+    monthly_by_category = [
+        {
+            "month": int(row.month),
+            "category": row.category,
+            "total": float(row.total)
+        }
+        for row in monthly_category_rows
+    ]
+
     return {
         "total": float(total_general or 0),
         "monthly": monthly,
-        "by_category": by_category
+        "by_category": by_category,
+        "monthly_by_category": monthly_by_category
     }
 
 
