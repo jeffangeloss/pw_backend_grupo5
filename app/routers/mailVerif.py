@@ -4,11 +4,10 @@ import os
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi_mail import FastMail, MessageSchema
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..mailing import build_mail_config
+from ..mailing import send_html_email
 from ..models import User
 from ..schemas import TokenRequest, VerifRequest
 
@@ -105,23 +104,14 @@ async def send_verification_email_for_user(*, email: str, db: Session):
     </html>
     """
 
-    message = MessageSchema(
-        subject="Verifica tu correo",
-        recipients=[clean_email],
-        body=html_content,
-        subtype="html",
-    )
-
-    conf = build_mail_config()
-    if not conf:
-        raise HTTPException(
-            status_code=503,
-            detail="Configuracion de correo incompleta: define SENDER_EMAIL y SENDER_PASSWORD",
-        )
-
     try:
-        fm = FastMail(conf)
-        await fm.send_message(message)
+        await send_html_email(
+            subject="Verifica tu correo",
+            recipients=[clean_email],
+            html_body=html_content,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Fallo envio de verificacion para %s", clean_email)
         exc_message = str(exc).strip()
