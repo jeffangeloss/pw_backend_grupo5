@@ -216,7 +216,7 @@ ULTIMOS EGRESOS:
 
                 sessions[user_id] = {
                     "chat": current_model.start_chat(
-                        history=[{"role": "user", "parts": [f"Contexto de trabajo:\n{contexto}"]}]
+                        history=[{"role": "model", "parts": [f"Contexto de trabajo:\n{contexto}"]}]
                     ),
                     "last_used": time.time(),
                 }
