@@ -13,18 +13,6 @@ from app.models import AccessEventType, AccessLog, AdminAuditLog, User, UserRole
 from app.password_policy import ensure_password_policy
 from app.security import decode_access_token, get_password_hash
 
-# Mantiene la validacion introducida en main para evitar despliegues inseguros.
-ENV = os.getenv("ENV", "dev").strip().lower()
-ADMIN_TOKEN_GUARD_ENABLED = os.getenv("ADMIN_TOKEN_GUARD_ENABLED", "false").lower() in {
-    "1",
-    "true",
-    "yes",
-}
-
-if ENV in {"prod", "production"} and not ADMIN_TOKEN_GUARD_ENABLED:
-    raise RuntimeError("ADMIN_TOKEN_GUARD_ENABLED debe estar en true en produccion.")
-
-
 ROLE_TO_TYPE = {
     UserRole.user: 1,
     UserRole.admin: 2,
@@ -282,7 +270,6 @@ async def verify_admin_token(
 
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
-
 
 @router.post("/", status_code=201)
 async def add_user(
