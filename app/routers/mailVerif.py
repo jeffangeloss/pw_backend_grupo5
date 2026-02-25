@@ -18,7 +18,11 @@ TOKEN_EXPIRATION_HOURS = int(os.getenv("EMAIL_VERIFICATION_TOKEN_HOURS", "24"))
 
 
 def _build_frontend_verify_link(token: str):
-    frontend_url = (os.getenv("FRONTEND_URL") or "http://localhost:5173").rstrip("/")
+    frontend_url = (os.getenv("FRONTEND_URL") or "").strip().rstrip("/")
+    if not frontend_url:
+        raise ValueError(
+            "FRONTEND_URL no configurado para generar enlaces de verificacion"
+        )
     return f"{frontend_url}/#/registro/verif?token={token}"
 
 
@@ -38,7 +42,10 @@ async def send_verification_email_for_user(*, email: str, db: Session):
     user.token_verification_expires = expires_at
     db.commit()
 
-    link = _build_frontend_verify_link(token)
+    try:
+        link = _build_frontend_verify_link(token)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     html_content = f"""
     <!DOCTYPE html>
     <html lang="es">
