@@ -1,10 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
 import google.generativeai as genai
 import os
 from typing import Dict, Optional
-from dotenv import load_dotenv
 import time
 from sqlalchemy import extract, func
 from sqlalchemy.orm import Session
@@ -13,8 +12,7 @@ from app.models import Category, Expense, User
 from app.security import decode_access_token
 import threading
 import logging
-
-load_dotenv()
+import datetime
 
 API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
@@ -29,6 +27,9 @@ logger = logging.getLogger("chatbot")
 
 sessions: Dict[str, dict] = {}
 SESSION_TIMEOUT = 1800
+MAX_CHAT_HISTORY = 3          # últimos 3 turnos
+MAX_EXPENSES_CONTEXT = 10     # últimos 10 egresos
+MAX_ACTIVE_SESSIONS = 20
 lock = threading.Lock()
 
 
@@ -50,7 +51,7 @@ def cleanup_sessions():
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 
-def _get_user_from_token(token: str, db: Session) -> User | None:
+def _get_user_from_token(token: str, db: Session) -> Optional[User]:
     try:
         payload = decode_access_token(token)
     except Exception:
@@ -86,103 +87,69 @@ def get_expenses_stats(
     month: Optional[int] = None
 ):
     db_query = db.query(Expense).filter(Expense.user_id == current_user.id)
-
     if year:
         db_query = db_query.filter(extract("year", Expense.expense_date) == year)
-
     if month:
         db_query = db_query.filter(extract("month", Expense.expense_date) == month)
 
-    total_general = (
-        db_query.with_entities(
-            func.coalesce(func.sum(Expense.amount), 0)
-        ).scalar()
-    )
+    total_general = db_query.with_entities(func.coalesce(func.sum(Expense.amount), 0)).scalar()
 
-    monthly_rows = (
-        db_query.with_entities(
-            extract("month", Expense.expense_date).label("month"),
-            func.sum(Expense.amount).label("total")
-        )
-        .group_by("month")
-        .order_by("month")
-        .all()
-    )
+    monthly_rows = db_query.with_entities(
+        extract("month", Expense.expense_date).label("month"),
+        func.sum(Expense.amount).label("total")
+    ).group_by("month").order_by("month").all()
 
-    monthly = [
-        {"month": int(row.month), "total": float(row.total)}
-        for row in monthly_rows
-    ]
+    monthly = [{"month": int(row.month), "total": float(row.total)} for row in monthly_rows]
 
-    category_query = (
-        db.query(
-            Category.name.label("category"),
-            func.sum(Expense.amount).label("total")
-        )
+    category_rows = (
+        db.query(Category.name.label("category"), func.sum(Expense.amount).label("total"))
         .join(Expense, Expense.category_id == Category.id)
         .filter(Expense.user_id == current_user.id)
     )
-
     if year:
-        category_query = category_query.filter(extract("year", Expense.expense_date) == year)
-
+        category_rows = category_rows.filter(extract("year", Expense.expense_date) == year)
     if month:
-        category_query = category_query.filter(extract("month", Expense.expense_date) == month)
+        category_rows = category_rows.filter(extract("month", Expense.expense_date) == month)
 
-    category_rows = (
-        category_query
-        .group_by(Category.name)
-        .order_by(func.sum(Expense.amount).desc())
-        .all()
-    )
+    category_rows = category_rows.group_by(Category.name).order_by(func.sum(Expense.amount).desc()).all()
+    by_category = [{"category": row.category, "total": float(row.total)} for row in category_rows]
 
-    by_category = [
-        {"category": row.category, "total": float(row.total)}
-        for row in category_rows
-    ]
-
-    return {
-        "total": float(total_general or 0),
-        "monthly": monthly,
-        "by_category": by_category
-    }
+    return {"total": float(total_general or 0), "monthly": monthly, "by_category": by_category}
 
 
 @router.post("/")
-async def chat(
-    request: ChatRequest,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+async def chat(request: ChatRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
         cleanup_sessions()
         user_id = str(user.id)
 
         with lock:
-            if user_id not in sessions:
+            if len(sessions) >= MAX_ACTIVE_SESSIONS and user_id not in sessions:
+                oldest = min(sessions.items(), key=lambda x: x[1]["last_used"])[0]
+                del sessions[oldest]
 
+            if user_id not in sessions:
                 stats = get_expenses_stats(current_user=user, db=db)
 
                 expenses = (
                     db.query(Expense)
                     .filter(Expense.user_id == user.id)
                     .order_by(Expense.expense_date.desc())
-                    .limit(50)
+                    .limit(MAX_EXPENSES_CONTEXT)
                     .all()
                 )
 
                 expenses_list = [
-                    {
-                        "amount": float(e.amount),
-                        "category": e.category.name if e.category else None,
-                        "date": str(e.expense_date)
-                    }
+                    {"amount": float(e.amount),
+                     "category": e.category.name if e.category else None,
+                     "date": str(e.expense_date)}
                     for e in expenses
                 ]
 
                 contexto = f"""
 Eres un asesor financiero personal.
-Responde siempre breve y directo.
+Responde de forma amigable y clara, como un asistente útil y concreto.
+Hoy día es {datetime.datetime.today()}.
 
 ESTADISTICAS:
 {stats}
@@ -192,21 +159,19 @@ ULTIMOS EGRESOS:
 """
 
                 sessions[user_id] = {
-                    "chat": model.start_chat(
-                        history=[{"role": "user", "parts": [contexto]}]
-                    ),
+                    "chat": model.start_chat(history=[{"role": "system", "parts": [contexto]}]),
                     "last_used": time.time()
                 }
 
             user_session = sessions[user_id]
             user_session["last_used"] = time.time()
 
+            chat_history = user_session["chat"].history[-MAX_CHAT_HISTORY:]
+            user_session["chat"].history = chat_history
+
         response = user_session["chat"].send_message(
             request.message,
-            generation_config={
-                "temperature": 0.4,
-                "max_output_tokens": 1000
-            }
+            generation_config={"temperature": 0.4, "max_output_tokens": 300}
         )
 
         if not response or not response.text:
@@ -216,7 +181,6 @@ ULTIMOS EGRESOS:
 
     except HTTPException:
         raise
-
     except Exception as e:
         logger.exception("Error en chatbot")
         raise HTTPException(500, "Error generando respuesta")
