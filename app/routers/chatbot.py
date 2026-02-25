@@ -28,10 +28,7 @@ lock = threading.Lock()
 
 
 def _resolve_api_key():
-    return (
-        (os.getenv("GEMINI_API_KEY") or "").strip()
-        or (os.getenv("GOOGLE_API_KEY") or "").strip()
-    )
+    return (os.getenv("GEMINI_API_KEY") or "").strip()
 
 
 def _resolve_model_name():
@@ -47,7 +44,7 @@ def _get_model():
     if not api_key:
         raise HTTPException(
             status_code=503,
-            detail="Chatbot no configurado: falta GEMINI_API_KEY o GOOGLE_API_KEY",
+            detail="Chatbot no configurado: falta GEMINI_API_KEY",
         )
 
     try:
