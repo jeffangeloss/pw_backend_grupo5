@@ -585,14 +585,15 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
     }
 
 
-def _decode_tmp_token_or_401(tmp_token: str) -> dict:
+def _decode_2fa_token_or_401(raw_token: str) -> dict:
     try:
-        payload = decode_access_token(tmp_token)
+        payload = decode_access_token(raw_token)
     except Exception as exc:
         raise HTTPException(status_code=401, detail="Token temporal invalido o expirado") from exc
 
-    if str(payload.get("stage") or "").upper() != "PWD_OK":
+    if not payload.get("sub"):
         raise HTTPException(status_code=401, detail="Token temporal invalido o expirado")
+
     return payload
 
 
@@ -605,31 +606,68 @@ async def verify_two_factor(payload: TwoFactorVerifyRequest, request: Request, d
     if not totp_secret:
         raise HTTPException(status_code=503, detail="2FA obligatorio no configurado")
 
-    token_payload = _decode_tmp_token_or_401(payload.tmp_token)
-    challenge_id_raw = (token_payload.get("challenge_id") or "").strip()
-    user_id_raw = (token_payload.get("sub") or "").strip()
-    if not challenge_id_raw or not user_id_raw:
+    now = _utcnow()
+    token_payload = _decode_2fa_token_or_401(payload.tmp_token)
+    token_stage = str(token_payload.get("stage") or "").upper()
+
+    user: User | None = None
+    challenge: AuthChallenge | None = None
+
+    if token_stage == "PWD_OK":
+        challenge_id_raw = (token_payload.get("challenge_id") or "").strip()
+        user_id_raw = (token_payload.get("sub") or "").strip()
+        if not challenge_id_raw or not user_id_raw:
+            raise HTTPException(status_code=401, detail="Token temporal invalido o expirado")
+
+        try:
+            challenge_id = UUID(challenge_id_raw)
+            user_id = UUID(user_id_raw)
+        except Exception as exc:
+            raise HTTPException(status_code=401, detail="Token temporal invalido o expirado") from exc
+
+        challenge = (
+            db.query(AuthChallenge)
+            .filter(AuthChallenge.id == challenge_id, AuthChallenge.user_id == user_id)
+            .first()
+        )
+        if not challenge:
+            raise HTTPException(status_code=401, detail="Token temporal invalido o expirado")
+
+        user = db.query(User).filter(User.id == user_id).first()
+    elif token_stage in {"FULL", ""}:
+        user_email = str(token_payload.get("email") or token_payload.get("sub") or "").strip().lower()
+        if not user_email:
+            raise HTTPException(status_code=401, detail="Token temporal invalido o expirado")
+
+        user = db.query(User).filter(User.email == user_email).first()
+        if user:
+            challenge = (
+                db.query(AuthChallenge)
+                .filter(
+                    AuthChallenge.user_id == user.id,
+                    AuthChallenge.status == "PENDING",
+                    AuthChallenge.expires_at >= now,
+                )
+                .order_by(AuthChallenge.created_at.desc())
+                .first()
+            )
+            if not challenge:
+                challenge = AuthChallenge(
+                    user_id=user.id,
+                    status="PENDING",
+                    attempts=0,
+                    expires_at=now + timedelta(minutes=TWO_FACTOR_TMP_TOKEN_EXPIRE_MINUTES),
+                    request_ip=_extract_client_ip(request),
+                    user_agent=_extract_web_agent(request),
+                )
+                db.add(challenge)
+                db.flush()
+    else:
         raise HTTPException(status_code=401, detail="Token temporal invalido o expirado")
 
-    try:
-        challenge_id = UUID(challenge_id_raw)
-        user_id = UUID(user_id_raw)
-    except Exception as exc:
-        raise HTTPException(status_code=401, detail="Token temporal invalido o expirado") from exc
-
-    challenge = (
-        db.query(AuthChallenge)
-        .filter(AuthChallenge.id == challenge_id, AuthChallenge.user_id == user_id)
-        .first()
-    )
-    if not challenge:
-        raise HTTPException(status_code=401, detail="Token temporal invalido o expirado")
-
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user or not user.is_active or not user.email_verified:
+    if not user or not user.is_active or not user.email_verified or not challenge:
         raise HTTPException(status_code=401, detail="Usuario no autorizado")
 
-    now = _utcnow()
     if challenge.status != "PENDING":
         raise HTTPException(status_code=401, detail="Desafio 2FA ya utilizado o invalido")
 
