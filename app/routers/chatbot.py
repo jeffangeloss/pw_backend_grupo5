@@ -13,17 +13,17 @@ from app.security import decode_access_token
 import threading
 import logging
 import datetime
+import hashlib
 
 router = APIRouter(prefix="/chat", tags=["Chatbot"])
 
 logger = logging.getLogger("chatbot")
-model = None
+
+SESSION_TIMEOUT = 900
+MAX_EXPENSES_CONTEXT = 5
+MAX_ACTIVE_SESSIONS = 5
 
 sessions: Dict[str, dict] = {}
-SESSION_TIMEOUT = 1800
-MAX_CHAT_HISTORY = 3
-MAX_EXPENSES_CONTEXT = 10
-MAX_ACTIVE_SESSIONS = 20
 lock = threading.Lock()
 
 
@@ -33,40 +33,6 @@ def _resolve_api_key() -> str:
 
 def _resolve_model_name() -> str:
     return (os.getenv("GEMINI_MODEL") or "gemini-2.5-flash-lite").strip()
-
-
-def _resolve_max_output_tokens() -> int:
-    raw = (os.getenv("CHAT_MAX_OUTPUT_TOKENS") or "700").strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = 700
-    return max(128, min(value, 2048))
-
-
-MAX_OUTPUT_TOKENS = _resolve_max_output_tokens()
-
-
-def _get_model():
-    global model
-    if model is not None:
-        return model
-
-    api_key = _resolve_api_key()
-    if not api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="Chatbot no configurado: falta GEMINI_API_KEY",
-        )
-
-    try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(_resolve_model_name())
-    except Exception as exc:
-        logger.exception("No se pudo inicializar el modelo Gemini")
-        raise HTTPException(status_code=503, detail="Chatbot no disponible temporalmente") from exc
-
-    return model
 
 
 class ChatRequest(BaseModel):
@@ -123,34 +89,59 @@ def get_expenses_stats(
     month: Optional[int] = None
 ):
     db_query = db.query(Expense).filter(Expense.user_id == current_user.id)
+
     if year:
         db_query = db_query.filter(extract("year", Expense.expense_date) == year)
     if month:
         db_query = db_query.filter(extract("month", Expense.expense_date) == month)
 
-    total_general = db_query.with_entities(func.coalesce(func.sum(Expense.amount), 0)).scalar()
+    total_general = db_query.with_entities(
+        func.coalesce(func.sum(Expense.amount), 0)
+    ).scalar()
 
     monthly_rows = db_query.with_entities(
         extract("month", Expense.expense_date).label("month"),
         func.sum(Expense.amount).label("total")
     ).group_by("month").order_by("month").all()
 
-    monthly = [{"month": int(row.month), "total": float(row.total)} for row in monthly_rows]
+    monthly = [
+        {"month": int(row.month), "total": float(row.total)}
+        for row in monthly_rows
+    ]
 
     category_rows = (
-        db.query(Category.name.label("category"), func.sum(Expense.amount).label("total"))
+        db.query(Category.name.label("category"),
+                 func.sum(Expense.amount).label("total"))
         .join(Expense, Expense.category_id == Category.id)
         .filter(Expense.user_id == current_user.id)
     )
+
     if year:
-        category_rows = category_rows.filter(extract("year", Expense.expense_date) == year)
+        category_rows = category_rows.filter(
+            extract("year", Expense.expense_date) == year
+        )
     if month:
-        category_rows = category_rows.filter(extract("month", Expense.expense_date) == month)
+        category_rows = category_rows.filter(
+            extract("month", Expense.expense_date) == month
+        )
 
-    category_rows = category_rows.group_by(Category.name).order_by(func.sum(Expense.amount).desc()).all()
-    by_category = [{"category": row.category, "total": float(row.total)} for row in category_rows]
+    category_rows = (
+        category_rows
+        .group_by(Category.name)
+        .order_by(func.sum(Expense.amount).desc())
+        .all()
+    )
 
-    return {"total": float(total_general or 0), "monthly": monthly, "by_category": by_category}
+    by_category = [
+        {"category": row.category, "total": float(row.total)}
+        for row in category_rows
+    ]
+
+    return {
+        "total": float(total_general or 0),
+        "monthly": monthly,
+        "by_category": by_category,
+    }
 
 
 def _response_cut_by_tokens(response) -> bool:
@@ -170,42 +161,47 @@ def _response_cut_by_tokens(response) -> bool:
 
 
 @router.post("/")
-async def chat(request: ChatRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def chat(
+    request: ChatRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     try:
-        current_model = _get_model()
         cleanup_sessions()
         user_id = str(user.id)
 
         with lock:
             if len(sessions) >= MAX_ACTIVE_SESSIONS and user_id not in sessions:
-                oldest = min(sessions.items(), key=lambda x: x[1]["last_used"])[0]
+                oldest = min(
+                    sessions.items(),
+                    key=lambda x: x[1]["last_used"]
+                )[0]
                 del sessions[oldest]
 
-            if user_id not in sessions:
-                stats = get_expenses_stats(current_user=user, db=db)
+        stats = get_expenses_stats(current_user=user, db=db)
 
-                expenses = (
-                    db.query(Expense)
-                    .filter(Expense.user_id == user.id)
-                    .order_by(Expense.expense_date.desc())
-                    .limit(MAX_EXPENSES_CONTEXT)
-                    .all()
-                )
+        expenses = (
+            db.query(Expense)
+            .filter(Expense.user_id == user.id)
+            .order_by(Expense.expense_date.desc())
+            .limit(MAX_EXPENSES_CONTEXT)
+            .all()
+        )
 
-                expenses_list = [
-                    {
-                        "amount": float(e.amount),
-                        "category": e.category.name if e.category else None,
-                        "date": str(e.expense_date),
-                    }
-                    for e in expenses
-                ]
+        expenses_list = [
+            {
+                "amount": float(e.amount),
+                "category": e.category.name if e.category else None,
+                "date": str(e.expense_date),
+            }
+            for e in expenses
+        ]
 
-                contexto = f"""
+        contexto = f"""
 Eres un asesor financiero personal.
-Responde de forma amigable y clara, como un asistente util y concreto.
+Responde claro, breve y útil.
 No dejes frases incompletas.
-Hoy dia es {datetime.datetime.today()}.
+Hoy es {datetime.datetime.today()}.
 
 ESTADISTICAS:
 {stats}
@@ -214,38 +210,59 @@ ULTIMOS EGRESOS:
 {expenses_list}
 """
 
+        raw_context = str(stats) + str(expenses_list)
+        context_hash = hashlib.md5(raw_context.encode()).hexdigest()
+
+        with lock:
+            session = sessions.get(user_id)
+
+            if session is None or session["context_hash"] != context_hash:
                 sessions[user_id] = {
-                    "chat": current_model.start_chat(
-                        history=[{"role": "model", "parts": [f"Contexto de trabajo:\n{contexto}"]}]
-                    ),
+                    "context": contexto,
+                    "context_hash": context_hash,
                     "last_used": time.time(),
                 }
+            else:
+                sessions[user_id]["last_used"] = time.time()
 
-            user_session = sessions[user_id]
-            user_session["last_used"] = time.time()
+        api_key = _resolve_api_key()
+        if not api_key:
+            raise HTTPException(
+                status_code=503,
+                detail="Falta GEMINI_API_KEY",
+            )
 
-            try:
-                chat_history = user_session["chat"].history[-MAX_CHAT_HISTORY:]
-                user_session["chat"].history = chat_history
-            except Exception:
-                pass
+        genai.configure(api_key=api_key)
 
-        response = user_session["chat"].send_message(
+        model = genai.GenerativeModel(
+            model_name=_resolve_model_name(),
+            system_instruction=sessions[user_id]["context"],
+        )
+
+        chat = model.start_chat()
+
+        response = chat.send_message(
             request.message,
-            generation_config={"temperature": 0.4, "max_output_tokens": MAX_OUTPUT_TOKENS},
+            generation_config={
+                "temperature": 0.4,
+                "max_output_tokens": 500,
+            },
         )
 
         if not response or not response.text:
-            raise HTTPException(500, "Respuesta vacia del modelo")
+            raise HTTPException(500, "Respuesta vacía del modelo")
 
         text = response.text
 
-        # If output was cut by token limit, ask for a short continuation.
         if _response_cut_by_tokens(response):
-            continuation = user_session["chat"].send_message(
-                "Continua exactamente donde te quedaste, sin repetir, y cierra con una frase completa.",
-                generation_config={"temperature": 0.2, "max_output_tokens": 220},
+            continuation = chat.send_message(
+                "Continúa exactamente donde te quedaste y cierra la idea.",
+                generation_config={
+                    "temperature": 0.2,
+                    "max_output_tokens": 200,
+                },
             )
+
             if continuation and continuation.text:
                 text = f"{text.rstrip()}\n{continuation.text.strip()}"
 
