@@ -1,36 +1,21 @@
-﻿import datetime
+import datetime
+import logging
 import os
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi_mail import ConnectionConfig, FastMail, MessageSchema
+from fastapi_mail import FastMail, MessageSchema
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..mailing import build_mail_config
 from ..models import User
 from ..schemas import TokenRequest, VerifRequest
 
 router = APIRouter(prefix="/mailverif", tags=["MailVerification"])
+logger = logging.getLogger(__name__)
 
 TOKEN_EXPIRATION_HOURS = int(os.getenv("EMAIL_VERIFICATION_TOKEN_HOURS", "24"))
-
-
-def _build_mail_config():
-    sender_email = (os.getenv("SENDER_EMAIL") or "").strip()
-    sender_password = (os.getenv("SENDER_PASSWORD") or "").strip()
-    if not sender_email or not sender_password:
-        return None
-
-    return ConnectionConfig(
-        MAIL_USERNAME=sender_email,
-        MAIL_PASSWORD=sender_password,
-        MAIL_FROM=sender_email,
-        MAIL_PORT=587,
-        MAIL_SERVER="smtp.gmail.com",
-        MAIL_STARTTLS=True,
-        MAIL_SSL_TLS=False,
-        USE_CREDENTIALS=True,
-    )
 
 
 def _build_frontend_verify_link(token: str):
@@ -127,7 +112,7 @@ async def send_verification_email_for_user(*, email: str, db: Session):
         subtype="html",
     )
 
-    conf = _build_mail_config()
+    conf = build_mail_config()
     if not conf:
         raise HTTPException(
             status_code=503,
@@ -138,7 +123,12 @@ async def send_verification_email_for_user(*, email: str, db: Session):
         fm = FastMail(conf)
         await fm.send_message(message)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail="No se pudo enviar el correo de verificacion") from exc
+        logger.exception("Fallo envio de verificacion para %s", clean_email)
+        exc_message = str(exc).strip()
+        detail = "No se pudo enviar el correo de verificacion"
+        if exc_message:
+            detail = f"{detail}: {exc_message}"
+        raise HTTPException(status_code=502, detail=detail) from exc
 
 
 @router.post("/send")
