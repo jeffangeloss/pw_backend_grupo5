@@ -75,13 +75,10 @@ def build_mail_config() -> ConnectionConfig | None:
     )
 
 
-def _resolve_mail_from() -> str:
+def _resolve_resend_mail_from() -> str:
     mail_from = (os.getenv("MAIL_FROM") or "").strip()
     if mail_from:
         return mail_from
-    sender_email = (os.getenv("SENDER_EMAIL") or "").strip()
-    if sender_email:
-        return sender_email
     return "onboarding@resend.dev"
 
 
@@ -104,7 +101,7 @@ async def _send_email_with_resend(*, subject: str, recipients: list[str], html_b
     if not resend_api_key:
         raise ValueError("Falta RESEND_API_KEY para envio por API")
 
-    mail_from = _resolve_mail_from()
+    mail_from = _resolve_resend_mail_from()
     payload = {
         "from": _build_mail_from_header(mail_from),
         "to": recipients,
