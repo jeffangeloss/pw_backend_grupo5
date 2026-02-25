@@ -9,7 +9,6 @@ import os
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
-from fastapi.staticfiles import StaticFiles
 from pydantic import AliasChoices, BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -34,9 +33,6 @@ from .security import (
     verify_password,
 )
 
-BASE_DIR = Path(__file__).resolve().parents[1]
-UPLOADS_DIR = BASE_DIR / "uploads"
-AVATARS_DIR = UPLOADS_DIR / "avatars"
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
 CLOUDINARY_FOLDER = (os.getenv("CLOUDINARY_FOLDER") or "pw-backend-grupo5/avatars").strip()
 ALLOWED_AVATAR_EXTENSIONS = {
@@ -62,9 +58,6 @@ ALLOWED_AVATAR_EXTENSIONS = {
     ".jfif",
     ".bmp",
 }
-
-UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-AVATARS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def migrate_plain_passwords_to_hash():
@@ -203,18 +196,17 @@ def _validate_avatar_extension(filename: str):
     extension = Path(filename or "").suffix.lower()
     if extension not in ALLOWED_AVATAR_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Formato de imagen no permitido")
-    return extension
 
 
 def _configure_cloudinary():
     if cloudinary is None:
-        return False
+        raise HTTPException(status_code=503, detail="Cloudinary no esta disponible en el servidor")
 
     cloud_name = (os.getenv("CLOUDINARY_CLOUD_NAME") or "").strip()
     api_key = (os.getenv("CLOUDINARY_API_KEY") or "").strip()
     api_secret = (os.getenv("CLOUDINARY_API_SECRET") or "").strip()
     if not cloud_name or not api_key or not api_secret:
-        return False
+        raise HTTPException(status_code=503, detail="Cloudinary no esta configurado")
     
     cloudinary.config(
         cloud_name=cloud_name,
@@ -222,12 +214,10 @@ def _configure_cloudinary():
         api_secret=api_secret,
         secure=True,
     )
-    return True
 
 
 def _upload_avatar_to_cloudinary(file_bytes: bytes, *, user_id: str):
-    if not _configure_cloudinary():
-        return None
+    _configure_cloudinary()
 
     try:
         result = cloudinary_uploader.upload(
@@ -261,8 +251,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 
 class LoginRequest(BaseModel):
@@ -533,7 +521,7 @@ async def upload_my_avatar(
     if not file.filename:
         raise HTTPException(status_code=400, detail="Archivo invalido")
 
-    extension = _validate_avatar_extension(file.filename)
+    _validate_avatar_extension(file.filename)
     content_type = (file.content_type or "").lower()
     if not content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="El archivo debe ser una imagen")
@@ -548,14 +536,7 @@ async def upload_my_avatar(
         file_bytes,
         user_id=str(current_user.id),
     )
-    if cloudinary_avatar_url:
-        current_user.avatar_url = cloudinary_avatar_url
-    else:
-        safe_name = f"{uuid4().hex}{extension}"
-        destination = AVATARS_DIR / safe_name
-        with destination.open("wb") as out_file:
-            out_file.write(file_bytes)
-        current_user.avatar_url = f"/uploads/avatars/{safe_name}"
+    current_user.avatar_url = cloudinary_avatar_url
     current_user.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(current_user)
