@@ -532,23 +532,49 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
     if not totp_secret:
         raise HTTPException(status_code=503, detail="2FA obligatorio no configurado")
 
+    now = _utcnow()
+    request_ip = _extract_client_ip(request)
+    user_agent = _extract_web_agent(request)
+
     (
         db.query(AuthChallenge)
-        .filter(AuthChallenge.user_id == user.id, AuthChallenge.status == "PENDING")
+        .filter(
+            AuthChallenge.user_id == user.id,
+            AuthChallenge.status == "PENDING",
+            AuthChallenge.expires_at < now,
+        )
         .update({"status": "EXPIRED"}, synchronize_session=False)
     )
 
-    expires_at = _utcnow() + timedelta(minutes=TWO_FACTOR_TMP_TOKEN_EXPIRE_MINUTES)
-    challenge = AuthChallenge(
-        user_id=user.id,
-        status="PENDING",
-        attempts=0,
-        expires_at=expires_at,
-        request_ip=_extract_client_ip(request),
-        user_agent=_extract_web_agent(request),
+    challenge = (
+        db.query(AuthChallenge)
+        .filter(
+            AuthChallenge.user_id == user.id,
+            AuthChallenge.status == "PENDING",
+            AuthChallenge.expires_at >= now,
+        )
+        .order_by(AuthChallenge.created_at.desc())
+        .first()
     )
-    db.add(challenge)
-    db.flush()
+
+    if challenge and challenge.attempts >= TWO_FACTOR_MAX_ATTEMPTS:
+        challenge.status = "FAILED"
+        challenge = None
+
+    if not challenge:
+        challenge = AuthChallenge(
+            user_id=user.id,
+            status="PENDING",
+            attempts=0,
+            expires_at=now + timedelta(minutes=TWO_FACTOR_TMP_TOKEN_EXPIRE_MINUTES),
+            request_ip=request_ip,
+            user_agent=user_agent,
+        )
+        db.add(challenge)
+        db.flush()
+
+    remaining_seconds = max(60, int((challenge.expires_at - now).total_seconds()))
+    tmp_token_expire_minutes = max(1, (remaining_seconds + 59) // 60)
 
     role_name = user.role.value if user.role else "user"
     tmp_token = create_access_token(
@@ -559,7 +585,7 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
             "stage": "PWD_OK",
             "challenge_id": str(challenge.id),
         },
-        expires_minutes=TWO_FACTOR_TMP_TOKEN_EXPIRE_MINUTES,
+        expires_minutes=tmp_token_expire_minutes,
     )
     _create_access_log(
         db,
@@ -576,7 +602,7 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
         "requires_2fa": True,
         "tmp_token": tmp_token,
         "challenge_id": str(challenge.id),
-        "expires_in": TWO_FACTOR_TMP_TOKEN_EXPIRE_MINUTES * 60,
+        "expires_in": remaining_seconds,
         "rol": role_name,
         "id": str(user.id),
         "email": user.email,
@@ -778,6 +804,18 @@ async def device_notify_ack(serial: str, db: Session = Depends(get_db)):
     pending.device_notified_at = _utcnow()
     db.commit()
     return {"acknowledged": True, "pattern": DEVICE_NOTIFY_PATTERN}
+
+
+@app.get("/device/epoch")
+async def device_epoch(serial: str, db: Session = Depends(get_db)):
+    _get_active_device_or_404(serial, db)
+    now = _utcnow()
+    return {
+        "epoch": int(now.timestamp()),
+        "iso_utc": now.isoformat() + "Z",
+        "period": TOTP_PERIOD_SECONDS,
+        "digits": TOTP_DIGITS,
+    }
 
 
 @app.post("/device/ping")
