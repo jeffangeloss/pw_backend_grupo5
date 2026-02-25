@@ -96,7 +96,29 @@ def _utcnow() -> datetime:
 
 
 def _is_two_factor_enabled() -> bool:
-    return TWO_FACTOR_REQUIRED and bool(TOTP_SECRET_GLOBAL)
+    return TWO_FACTOR_REQUIRED
+
+
+def _resolve_totp_secret(db: Session | None = None) -> str:
+    if TOTP_SECRET_GLOBAL:
+        return TOTP_SECRET_GLOBAL
+
+    if db is None or not DEVICE_SERIAL:
+        return ""
+
+    try:
+        device = db.query(TokenDevice).filter(TokenDevice.serial == DEVICE_SERIAL).first()
+    except SQLAlchemyError:
+        db.rollback()
+        return ""
+
+    if not device:
+        return ""
+
+    if (device.status or "").upper() != "ACTIVE":
+        return ""
+
+    return (device.secret_enc or "").strip()
 
 
 def _serialize_login_success(user: User, access_token: str):
@@ -249,7 +271,10 @@ def _get_user_from_token(token: str, db: Session) -> User | None:
         return None
 
     token_stage = str(payload.get("stage") or "").upper()
-    if token_stage and token_stage != "FULL":
+    if _is_two_factor_enabled():
+        if token_stage != "FULL":
+            return None
+    elif token_stage and token_stage != "FULL":
         return None
 
     email = (payload.get("sub") or "").strip().lower()
@@ -503,6 +528,10 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
         db.commit()
         return _serialize_login_success(user, access_token)
 
+    totp_secret = _resolve_totp_secret(db)
+    if not totp_secret:
+        raise HTTPException(status_code=503, detail="2FA obligatorio no configurado")
+
     (
         db.query(AuthChallenge)
         .filter(AuthChallenge.user_id == user.id, AuthChallenge.status == "PENDING")
@@ -572,6 +601,10 @@ async def verify_two_factor(payload: TwoFactorVerifyRequest, request: Request, d
     if not _is_two_factor_enabled():
         raise HTTPException(status_code=400, detail="2FA no esta habilitado")
 
+    totp_secret = _resolve_totp_secret(db)
+    if not totp_secret:
+        raise HTTPException(status_code=503, detail="2FA obligatorio no configurado")
+
     token_payload = _decode_tmp_token_or_401(payload.tmp_token)
     challenge_id_raw = (token_payload.get("challenge_id") or "").strip()
     user_id_raw = (token_payload.get("sub") or "").strip()
@@ -621,7 +654,7 @@ async def verify_two_factor(payload: TwoFactorVerifyRequest, request: Request, d
     provided_code = "".join(ch for ch in payload.code if ch.isdigit())
     try:
         valid_code = verify_totp_code(
-            TOTP_SECRET_GLOBAL,
+            totp_secret,
             provided_code,
             period=TOTP_PERIOD_SECONDS,
             digits=TOTP_DIGITS,

@@ -12,7 +12,7 @@ static const char* WIFI_PASS = "123456789";
 
 static const char* BACKEND_BASE_URL = "https://pw-backend-grupo5.onrender.com";
 static const char* DEVICE_SERIAL = "ESP32-DEMO-001";
-static const char* SECRET_BASE32 = "REEMPLAZAR_CON_TOTP_SECRET_GLOBAL_BASE32";
+static const char* SECRET_BASE32 = "Q3VIRM3IWNOSJGJXLSMNOFZXULFGTHAK";
 
 static const int TOTP_DIGITS = 6;
 static const int TOTP_PERIOD = 60;
