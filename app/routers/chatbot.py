@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
 import google.generativeai as genai
@@ -21,8 +21,8 @@ model = None
 
 sessions: Dict[str, dict] = {}
 SESSION_TIMEOUT = 1800
-MAX_CHAT_HISTORY = 3  # ultimos 3 turnos
-MAX_EXPENSES_CONTEXT = 10  # ultimos 10 egresos
+MAX_CHAT_HISTORY = 3          # últimos 3 turnos
+MAX_EXPENSES_CONTEXT = 10     # últimos 10 egresos
 MAX_ACTIVE_SESSIONS = 20
 lock = threading.Lock()
 
@@ -141,68 +141,6 @@ def get_expenses_stats(
     return {"total": float(total_general or 0), "monthly": monthly, "by_category": by_category}
 
 
-def _get_recent_expenses(current_user: User, db: Session):
-    rows = (
-        db.query(
-            Expense.amount.label("amount"),
-            Expense.expense_date.label("expense_date"),
-            Category.name.label("category"),
-        )
-        .outerjoin(Category, Expense.category_id == Category.id)
-        .filter(Expense.user_id == current_user.id)
-        .order_by(Expense.expense_date.desc())
-        .limit(MAX_EXPENSES_CONTEXT)
-        .all()
-    )
-
-    return [
-        {
-            "amount": float(row.amount or 0),
-            "category": row.category or "Sin categoria",
-            "date": str(row.expense_date),
-        }
-        for row in rows
-    ]
-
-
-def _format_history(history: list[dict]):
-    if not history:
-        return "Sin historial."
-
-    lines = []
-    for item in history:
-        role = item.get("role", "user")
-        text = (item.get("text") or "").strip()
-        lines.append(f"{role}: {text}")
-    return "\n".join(lines)
-
-
-def _build_prompt(*, user_message: str, stats: dict, expenses: list[dict], history: list[dict]):
-    return f"""
-Eres un asesor financiero personal.
-Responde en espanol, de forma clara y breve.
-Usa SOLO los datos del CONTEXTO ACTUAL para responder.
-Si te preguntan por categorias (por ejemplo alimentacion), usa by_category.
-No pidas al usuario que clasifique egresos si ya hay categorias en el contexto.
-Si falta informacion en el contexto, dilo de forma explicita.
-
-FECHA_ACTUAL: {datetime.datetime.today()}
-
-CONTEXTO ACTUAL:
-ESTADISTICAS:
-{stats}
-
-ULTIMOS EGRESOS:
-{expenses}
-
-HISTORIAL RECIENTE:
-{_format_history(history)}
-
-PREGUNTA ACTUAL:
-{user_message}
-""".strip()
-
-
 @router.post("/")
 async def chat(request: ChatRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
@@ -216,41 +154,63 @@ async def chat(request: ChatRequest, user: User = Depends(get_current_user), db:
                 del sessions[oldest]
 
             if user_id not in sessions:
-                sessions[user_id] = {"history": [], "last_used": time.time()}
+                stats = get_expenses_stats(current_user=user, db=db)
+
+                expenses = (
+                    db.query(Expense)
+                    .filter(Expense.user_id == user.id)
+                    .order_by(Expense.expense_date.desc())
+                    .limit(MAX_EXPENSES_CONTEXT)
+                    .all()
+                )
+
+                expenses_list = [
+                    {"amount": float(e.amount),
+                     "category": e.category.name if e.category else None,
+                     "date": str(e.expense_date)}
+                    for e in expenses
+                ]
+
+                contexto = f"""
+Eres un asesor financiero personal.
+Responde de forma amigable y clara, como un asistente útil y concreto.
+Hoy día es {datetime.datetime.today()}.
+
+ESTADISTICAS:
+{stats}
+
+ULTIMOS EGRESOS:
+{expenses_list}
+"""
+
+                sessions[user_id] = {
+                    "chat": current_model.start_chat(
+                        history=[{"role": "user", "parts": [f"Contexto de trabajo:\n{contexto}"]}]
+                    ),
+                    "last_used": time.time()
+                }
 
             user_session = sessions[user_id]
             user_session["last_used"] = time.time()
-            user_session["history"].append({"role": "user", "text": request.message})
-            user_session["history"] = user_session["history"][-(MAX_CHAT_HISTORY * 2):]
-            history_for_prompt = list(user_session["history"])
 
-        stats = get_expenses_stats(current_user=user, db=db)
-        expenses_list = _get_recent_expenses(current_user=user, db=db)
-        prompt = _build_prompt(
-            user_message=request.message,
-            stats=stats,
-            expenses=expenses_list,
-            history=history_for_prompt,
-        )
+            try:
+                chat_history = user_session["chat"].history[-MAX_CHAT_HISTORY:]
+                user_session["chat"].history = chat_history
+            except Exception:
+                pass
 
-        response = current_model.generate_content(
-            prompt,
-            generation_config={"temperature": 0.4, "max_output_tokens": 300},
+        response = user_session["chat"].send_message(
+            request.message,
+            generation_config={"temperature": 0.4, "max_output_tokens": 300}
         )
 
         if not response or not response.text:
-            raise HTTPException(500, "Respuesta vacia del modelo")
+            raise HTTPException(500, "Respuesta vacía del modelo")
 
-        reply_text = response.text
-        with lock:
-            if user_id in sessions:
-                sessions[user_id]["history"].append({"role": "model", "text": reply_text})
-                sessions[user_id]["history"] = sessions[user_id]["history"][-(MAX_CHAT_HISTORY * 2):]
-
-        return {"text": reply_text}
+        return {"text": response.text}
 
     except HTTPException:
         raise
-    except Exception:
+    except Exception as e:
         logger.exception("Error en chatbot")
         raise HTTPException(500, "Error generando respuesta")
