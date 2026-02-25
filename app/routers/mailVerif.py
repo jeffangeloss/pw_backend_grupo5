@@ -1,23 +1,23 @@
-from fastapi import APIRouter, Request, BackgroundTasks, Depends, HTTPException
-from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
-from sqlalchemy.orm import Session
-import uuid
-import datetime
+﻿import datetime
 import os
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi_mail import ConnectionConfig, FastMail, MessageSchema
+from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import User
-from ..security import get_password_hash
-from ..schemas import VerifRequest, TokenRequest
+from ..schemas import TokenRequest, VerifRequest
 
-router = APIRouter(
-    prefix="/mailverif",
-    tags=["MailVerification"]
-)
+router = APIRouter(prefix="/mailverif", tags=["MailVerification"])
+
+TOKEN_EXPIRATION_HOURS = int(os.getenv("EMAIL_VERIFICATION_TOKEN_HOURS", "24"))
+
 
 def _build_mail_config():
-    sender_email = os.getenv("SENDER_EMAIL")
-    sender_password = os.getenv("SENDER_PASSWORD")
+    sender_email = (os.getenv("SENDER_EMAIL") or "").strip()
+    sender_password = (os.getenv("SENDER_PASSWORD") or "").strip()
     if not sender_email or not sender_password:
         return None
 
@@ -32,41 +32,41 @@ def _build_mail_config():
         USE_CREDENTIALS=True,
     )
 
-@router.post("/send")
-async def send_verification_email(
-    request: VerifRequest,
-    bg_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
-):
-    email = request.email
-    user = db.query(User).filter(User.email == email).first()
+
+def _build_frontend_verify_link(token: str):
+    frontend_url = (os.getenv("FRONTEND_URL") or "http://localhost:5173").rstrip("/")
+    return f"{frontend_url}/#/registro/verif?token={token}"
+
+
+async def send_verification_email_for_user(*, email: str, db: Session):
+    clean_email = (email or "").strip().lower()
+    user = db.query(User).filter(User.email == clean_email).first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
-    # Generar token único
-    token = str(uuid.uuid4())
-    expires_at = datetime.datetime.now() + datetime.timedelta(hours=24)
+    if user.email_verified:
+        raise HTTPException(status_code=400, detail="El correo ya fue verificado")
 
-    # Guardar token en la DB
+    token = str(uuid.uuid4())
+    expires_at = datetime.datetime.now() + datetime.timedelta(hours=TOKEN_EXPIRATION_HOURS)
+
     user.token_verification = token
     user.token_verification_expires = expires_at
     db.commit()
 
-    # Construir link de verificación
-    link = f"http://localhost:5173/#/verificar-email?token={token}"
-
+    link = _build_frontend_verify_link(token)
     html_content = f"""
     <!DOCTYPE html>
     <html lang="es">
     <head>
     <meta charset="UTF-8">
-    <title>Confirmación de correo</title>
+    <title>Confirmacion de correo</title>
     </head>
     <body style="margin:0;padding:0;background-color:#f4f4f5;">
     <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f5;">
         <tr>
         <td align="center" style="padding:24px;">
-            
+
             <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background-color:#ffffff;border-radius:8px;">
             <tr>
                 <td align="center" style="padding:32px;font-family:Arial, Helvetica, sans-serif;">
@@ -79,10 +79,9 @@ async def send_verification_email(
                 </h2>
 
                 <p style="margin:0 0 24px 0;font-size:15px;line-height:1.5;color:#18181b;">
-                    Gracias por registrarte. Usa el siguiente código para confirmar tu cuenta:
+                    Gracias por registrarte. Usa el siguiente codigo para confirmar tu cuenta:
                 </p>
 
-                <!-- TOKEN -->
                 <div style="
                     margin:0 0 24px 0;
                     padding:16px;
@@ -96,16 +95,19 @@ async def send_verification_email(
                 </div>
 
                 <p style="margin:0 0 8px 0;font-size:14px;color:#18181b;">
-                    Ingresa este código en la pantalla de verificación.
+                    Tambien puedes abrir este enlace para completar la verificacion:
+                </p>
+
+                <p style="margin:0 0 16px 0;font-size:14px;word-break:break-all;">
+                    <a href="{link}" style="color:#2563eb;text-decoration:none;">{link}</a>
                 </p>
 
                 <p style="margin:0 0 24px 0;font-size:14px;color:#18181b;">
-                    El código expira en 24 horas.
+                    El codigo expira en {TOKEN_EXPIRATION_HOURS} horas.
                 </p>
 
                 <p style="margin:0;font-size:12px;color:#a1a1aa;line-height:1.4;">
                     Si no solicitaste este registro, puedes ignorar este correo.
-                    La cuenta no se activará sin confirmar el correo.
                 </p>
                 </td>
             </tr>
@@ -120,36 +122,48 @@ async def send_verification_email(
 
     message = MessageSchema(
         subject="Verifica tu correo",
-        recipients=[email],
+        recipients=[clean_email],
         body=html_content,
-        subtype="html"
+        subtype="html",
     )
 
-    # Configuración y envío en background
     conf = _build_mail_config()
-    if conf:
-        fm = FastMail(conf)
-        bg_tasks.add_task(fm.send_message, message)
+    if not conf:
+        raise HTTPException(
+            status_code=503,
+            detail="Configuracion de correo incompleta: define SENDER_EMAIL y SENDER_PASSWORD",
+        )
 
-    return {"msg": "Correo de verificación enviado"}
+    try:
+        fm = FastMail(conf)
+        await fm.send_message(message)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="No se pudo enviar el correo de verificacion") from exc
+
+
+@router.post("/send")
+async def send_verification_email(request: VerifRequest, db: Session = Depends(get_db)):
+    await send_verification_email_for_user(email=request.email, db=db)
+    return {"msg": "Correo de verificacion enviado"}
+
 
 @router.post("/confirm")
 async def confirm_email(body: TokenRequest, db: Session = Depends(get_db)):
-    token = body.token
-    
+    token = (body.token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Token invalido")
+
     user = db.query(User).filter(User.token_verification == token).first()
     if not user:
-        raise HTTPException(status_code=400, detail="Token inválido")
+        raise HTTPException(status_code=400, detail="Token invalido")
 
     if not user.token_verification_expires or user.token_verification_expires < datetime.datetime.now():
         raise HTTPException(status_code=400, detail="Token expirado")
 
-    # Activar cuenta y marcar email como verificado
     user.email_verified = True
     user.is_active = True
     user.token_verification = None
     user.token_verification_expires = None
-
     db.commit()
 
     return {"msg": "Correo verificado y cuenta activada"}
