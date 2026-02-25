@@ -70,6 +70,15 @@ def _user_type_by_role(role: UserRole | None):
     return ROLE_TO_TYPE.get(role or UserRole.user, 1)
 
 
+def _sanitize_avatar_url(avatar_url: str | None):
+    clean_avatar = (avatar_url or "").strip()
+    if not clean_avatar:
+        return None
+    if clean_avatar.startswith("/"):
+        return None
+    return clean_avatar
+
+
 def _latest_login_date(db: Session, user_id: UUID):
     latest_access = (
         db.query(AccessLog)
@@ -94,6 +103,8 @@ def _serialize_user_payload(user: User):
         "type": _user_type_by_role(user.role),
         "rol": role_value,
         "role_value": role_value,
+        "avatar_url": _sanitize_avatar_url(user.avatar_url),
+        "updated_at": user.updated_at.isoformat() if user.updated_at else None,
     }
 
 
@@ -492,12 +503,7 @@ async def get_logs_user(
 
     return {
         "msg": "",
-        "user": {
-            "id": str(user.id),
-            "nombre": user.full_name,
-            "email": user.email,
-            "rol": _role_label(user.role),
-        },
+        "user": _serialize_user_payload(user),
         "data": logs,
     }
 
