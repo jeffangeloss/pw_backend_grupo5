@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Integer,
     Numeric,
     String,
     Text,
@@ -28,7 +29,10 @@ class UserRole(str, enum.Enum):
 
 class AccessEventType(str, enum.Enum):
     LOGIN_SUCCESS = "LOGIN_SUCCESS"
+    LOGIN_PWD_OK = "LOGIN_PWD_OK"
     LOGIN_FAIL = "LOGIN_FAIL"
+    TWO_FACTOR_SUCCESS = "2FA_SUCCESS"
+    TWO_FACTOR_FAIL = "2FA_FAIL"
     LOGOUT = "LOGOUT"
     PASSWORD_RESET_REQUEST = "PASSWORD_RESET_REQUEST"
     PASSWORD_RESET_SUCCESS = "PASSWORD_RESET_SUCCESS"
@@ -68,6 +72,7 @@ class User(Base):
 
     expenses = relationship("Expense", back_populates="user", cascade="all, delete-orphan")
     access_logs = relationship("AccessLog", back_populates="user")
+    auth_challenges = relationship("AuthChallenge", back_populates="user", cascade="all, delete-orphan")
 
 
 class Category(Base):
@@ -113,8 +118,40 @@ class AccessLog(Base):
 
     ip_address = Column(String(45), nullable=True)
     web_agent = Column(String(255), nullable=True)
+    detail = Column(Text, nullable=True)
 
     user = relationship("User", back_populates="access_logs")
+
+
+class TokenDevice(Base):
+    __tablename__ = "token_device"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    serial = Column(String(100), nullable=False, unique=True)
+    secret_enc = Column(String(512), nullable=False)
+    digits = Column(Integer, nullable=False, default=6, server_default=text("6"))
+    period = Column(Integer, nullable=False, default=60, server_default=text("60"))
+    status = Column(String(20), nullable=False, default="ACTIVE", server_default=text("'ACTIVE'"))
+    created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+    last_seen_at = Column(DateTime, nullable=True)
+
+
+class AuthChallenge(Base):
+    __tablename__ = "auth_challenge"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(30), nullable=False, default="PENDING", server_default=text("'PENDING'"))
+    attempts = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
+    verified_at = Column(DateTime, nullable=True)
+    request_ip = Column(String(45), nullable=True)
+    user_agent = Column(String(255), nullable=True)
+    device_notified = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    device_notified_at = Column(DateTime, nullable=True)
+
+    user = relationship("User", back_populates="auth_challenges")
 
 
 class AdminAuditLog(Base):

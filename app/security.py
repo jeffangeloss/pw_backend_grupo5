@@ -7,7 +7,11 @@ from pwdlib import PasswordHash
 
 # BLOQUE SEGURIDAD: clave y vencimiento para token JWT.
 # En producción define JWT_SECRET_KEY en variables de entorno.
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-only-change-this-secret-key-min-32-bytes")
+SECRET_KEY = (
+    os.getenv("JWT_SECRET")
+    or os.getenv("JWT_SECRET_KEY")
+    or "dev-only-change-this-secret-key-min-32-bytes"
+)
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 

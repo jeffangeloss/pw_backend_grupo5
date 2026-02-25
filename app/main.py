@@ -1,8 +1,8 @@
 ﻿from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import os
 
@@ -21,7 +21,7 @@ except Exception:
     cloudinary_uploader = None
 
 from .database import get_db, session
-from .models import AccessEventType, AccessLog, User, UserRole
+from .models import AccessEventType, AccessLog, AuthChallenge, TokenDevice, User, UserRole
 from .password_policy import ensure_password_policy
 from .routers import admin, expenses, resetPass, categories, mailVerif, chatbot
 from .security import (
@@ -32,9 +32,19 @@ from .security import (
     is_password_hashed,
     verify_password,
 )
+from .totp_utils import verify_totp_code
 
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
 CLOUDINARY_FOLDER = (os.getenv("CLOUDINARY_FOLDER") or "pw-backend-grupo5/avatars").strip()
+DEVICE_SERIAL = ((os.getenv("DEVICE_SERIAL") or "ESP32-DEMO-001").strip() or "ESP32-DEMO-001")
+TOTP_SECRET_GLOBAL = (os.getenv("TOTP_SECRET_GLOBAL") or "").strip()
+TOTP_DIGITS = int(os.getenv("TOTP_DIGITS", "6"))
+TOTP_PERIOD_SECONDS = int(os.getenv("TOTP_PERIOD_SECONDS", "60"))
+TOTP_VALID_WINDOW = int(os.getenv("TOTP_VALID_WINDOW", "1"))
+TWO_FACTOR_TMP_TOKEN_EXPIRE_MINUTES = int(os.getenv("TWO_FACTOR_TMP_TOKEN_EXPIRE_MINUTES", "5"))
+TWO_FACTOR_MAX_ATTEMPTS = int(os.getenv("TWO_FACTOR_MAX_ATTEMPTS", "5"))
+TWO_FACTOR_REQUIRED = (os.getenv("TWO_FACTOR_REQUIRED", "true").strip().lower() not in {"0", "false", "no", "off"})
+DEVICE_NOTIFY_PATTERN = (os.getenv("DEVICE_NOTIFY_PATTERN") or "TRIPLE").strip().upper() or "TRIPLE"
 ALLOWED_AVATAR_EXTENSIONS = {
     ".png",
     ".jpg",
@@ -79,6 +89,94 @@ def migrate_plain_passwords_to_hash():
         print(f"No se pudo completar la migracion de passwords a hash: {exc}")
     finally:
         db.close()
+
+
+def _utcnow() -> datetime:
+    return datetime.utcnow()
+
+
+def _is_two_factor_enabled() -> bool:
+    return TWO_FACTOR_REQUIRED and bool(TOTP_SECRET_GLOBAL)
+
+
+def _serialize_login_success(user: User, access_token: str):
+    role_name = user.role.value if user.role else "user"
+    return {
+        "msg": "Acceso concedido",
+        "rol": role_name,
+        "id": str(user.id),
+        "email": user.email,
+        "name": user.full_name,
+        "avatar_url": _sanitize_avatar_url(user.avatar_url),
+        "token": access_token,
+        "access_token": access_token,
+        "token_type": "bearer",
+    }
+
+
+def _ensure_demo_device(db: Session):
+    if not DEVICE_SERIAL:
+        return
+
+    try:
+        device = db.query(TokenDevice).filter(TokenDevice.serial == DEVICE_SERIAL).first()
+        if not device:
+            if not TOTP_SECRET_GLOBAL:
+                return
+            device = TokenDevice(
+                serial=DEVICE_SERIAL,
+                secret_enc=TOTP_SECRET_GLOBAL,
+                digits=TOTP_DIGITS,
+                period=TOTP_PERIOD_SECONDS,
+                status="ACTIVE",
+            )
+            db.add(device)
+            db.commit()
+            return
+
+        updated = False
+        if TOTP_SECRET_GLOBAL and device.secret_enc != TOTP_SECRET_GLOBAL:
+            device.secret_enc = TOTP_SECRET_GLOBAL
+            updated = True
+        if device.digits != TOTP_DIGITS:
+            device.digits = TOTP_DIGITS
+            updated = True
+        if device.period != TOTP_PERIOD_SECONDS:
+            device.period = TOTP_PERIOD_SECONDS
+            updated = True
+        if updated:
+            db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+
+
+def _get_active_device_or_404(serial: str, db: Session) -> TokenDevice:
+    requested_serial = (serial or "").strip()
+    if not requested_serial:
+        raise HTTPException(status_code=400, detail="Serial requerido")
+
+    try:
+        device = db.query(TokenDevice).filter(TokenDevice.serial == requested_serial).first()
+        if not device and requested_serial == DEVICE_SERIAL and TOTP_SECRET_GLOBAL:
+            device = TokenDevice(
+                serial=DEVICE_SERIAL,
+                secret_enc=TOTP_SECRET_GLOBAL,
+                digits=TOTP_DIGITS,
+                period=TOTP_PERIOD_SECONDS,
+                status="ACTIVE",
+            )
+            db.add(device)
+            db.commit()
+            db.refresh(device)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Esquema 2FA pendiente de migracion") from exc
+
+    if not device:
+        raise HTTPException(status_code=404, detail="Dispositivo no registrado")
+    if (device.status or "").upper() != "ACTIVE":
+        raise HTTPException(status_code=403, detail="Dispositivo inactivo")
+    return device
 
 
 def _extract_client_ip(request: Request):
@@ -131,6 +229,7 @@ def _create_access_log(
     event_type: AccessEventType,
     attempt_email: str,
     request: Request,
+    detail: str | None = None,
 ):
     log = AccessLog(
         user_id=user.id if user else None,
@@ -138,6 +237,7 @@ def _create_access_log(
         attempt_email=attempt_email,
         ip_address=_extract_client_ip(request),
         web_agent=_extract_web_agent(request),
+        detail=detail,
     )
     db.add(log)
 
@@ -146,6 +246,10 @@ def _get_user_from_token(token: str, db: Session) -> User | None:
     try:
         payload = decode_access_token(token)
     except Exception:
+        return None
+
+    token_stage = str(payload.get("stage") or "").upper()
+    if token_stage and token_stage != "FULL":
         return None
 
     email = (payload.get("sub") or "").strip().lower()
@@ -249,6 +353,11 @@ def _upload_avatar_to_cloudinary(file_bytes: bytes, *, user_id: str):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     migrate_plain_passwords_to_hash()
+    db = session()
+    try:
+        _ensure_demo_device(db)
+    finally:
+        db.close()
     yield
 
 
@@ -271,6 +380,11 @@ class LoginRequest(BaseModel):
         validation_alias=AliasChoices("email", "correo", "username"),
     )
     password: str = Field(..., min_length=8, max_length=300)
+
+
+class TwoFactorVerifyRequest(BaseModel):
+    tmp_token: str = Field(..., min_length=16)
+    code: str = Field(..., min_length=6, max_length=10)
 
 
 class RegisterRequest(BaseModel):
@@ -331,6 +445,7 @@ async def register(register_request: RegisterRequest, db: Session = Depends(get_
     }
 
 
+@app.post("/auth/login")
 @app.post("/login")
 async def login(login_request: LoginRequest, request: Request, db: Session = Depends(get_db)):
     # BLOQUE LOGIN BD: validacion real contra tabla user en PostgreSQL.
@@ -375,28 +490,231 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
         db.commit()
         raise HTTPException(status_code=400, detail="Credenciales incorrectas")
 
-    access_token = create_access_token({"sub": user.email})
+    if not _is_two_factor_enabled():
+        access_token = create_access_token({"sub": user.email})
+        _create_access_log(
+            db,
+            user=user,
+            event_type=AccessEventType.LOGIN_SUCCESS,
+            attempt_email=user.email,
+            request=request,
+            detail="2FA_DISABLED",
+        )
+        db.commit()
+        return _serialize_login_success(user, access_token)
+
+    (
+        db.query(AuthChallenge)
+        .filter(AuthChallenge.user_id == user.id, AuthChallenge.status == "PENDING")
+        .update({"status": "EXPIRED"}, synchronize_session=False)
+    )
+
+    expires_at = _utcnow() + timedelta(minutes=TWO_FACTOR_TMP_TOKEN_EXPIRE_MINUTES)
+    challenge = AuthChallenge(
+        user_id=user.id,
+        status="PENDING",
+        attempts=0,
+        expires_at=expires_at,
+        request_ip=_extract_client_ip(request),
+        user_agent=_extract_web_agent(request),
+    )
+    db.add(challenge)
+    db.flush()
+
+    role_name = user.role.value if user.role else "user"
+    tmp_token = create_access_token(
+        {
+            "sub": str(user.id),
+            "email": user.email,
+            "role": role_name,
+            "stage": "PWD_OK",
+            "challenge_id": str(challenge.id),
+        },
+        expires_minutes=TWO_FACTOR_TMP_TOKEN_EXPIRE_MINUTES,
+    )
+    _create_access_log(
+        db,
+        user=user,
+        event_type=AccessEventType.LOGIN_PWD_OK,
+        attempt_email=user.email,
+        request=request,
+        detail=f"challenge_id={challenge.id}",
+    )
+    db.commit()
+
+    return {
+        "msg": "Segundo factor requerido",
+        "requires_2fa": True,
+        "tmp_token": tmp_token,
+        "challenge_id": str(challenge.id),
+        "expires_in": TWO_FACTOR_TMP_TOKEN_EXPIRE_MINUTES * 60,
+        "rol": role_name,
+        "id": str(user.id),
+        "email": user.email,
+        "name": user.full_name,
+        "avatar_url": _sanitize_avatar_url(user.avatar_url),
+    }
+
+
+def _decode_tmp_token_or_401(tmp_token: str) -> dict:
+    try:
+        payload = decode_access_token(tmp_token)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Token temporal invalido o expirado") from exc
+
+    if str(payload.get("stage") or "").upper() != "PWD_OK":
+        raise HTTPException(status_code=401, detail="Token temporal invalido o expirado")
+    return payload
+
+
+@app.post("/auth/2fa/verify")
+async def verify_two_factor(payload: TwoFactorVerifyRequest, request: Request, db: Session = Depends(get_db)):
+    if not _is_two_factor_enabled():
+        raise HTTPException(status_code=400, detail="2FA no esta habilitado")
+
+    token_payload = _decode_tmp_token_or_401(payload.tmp_token)
+    challenge_id_raw = (token_payload.get("challenge_id") or "").strip()
+    user_id_raw = (token_payload.get("sub") or "").strip()
+    if not challenge_id_raw or not user_id_raw:
+        raise HTTPException(status_code=401, detail="Token temporal invalido o expirado")
+
+    try:
+        challenge_id = UUID(challenge_id_raw)
+        user_id = UUID(user_id_raw)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Token temporal invalido o expirado") from exc
+
+    challenge = (
+        db.query(AuthChallenge)
+        .filter(AuthChallenge.id == challenge_id, AuthChallenge.user_id == user_id)
+        .first()
+    )
+    if not challenge:
+        raise HTTPException(status_code=401, detail="Token temporal invalido o expirado")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not user.is_active or not user.email_verified:
+        raise HTTPException(status_code=401, detail="Usuario no autorizado")
+
+    now = _utcnow()
+    if challenge.status != "PENDING":
+        raise HTTPException(status_code=401, detail="Desafio 2FA ya utilizado o invalido")
+
+    if challenge.expires_at < now:
+        challenge.status = "EXPIRED"
+        _create_access_log(
+            db,
+            user=user,
+            event_type=AccessEventType.TWO_FACTOR_FAIL,
+            attempt_email=user.email,
+            request=request,
+            detail=f"challenge_id={challenge.id};reason=EXPIRED",
+        )
+        db.commit()
+        raise HTTPException(status_code=401, detail="Codigo incorrecto o expirado")
+
+    if challenge.attempts >= TWO_FACTOR_MAX_ATTEMPTS:
+        challenge.status = "FAILED"
+        db.commit()
+        raise HTTPException(status_code=429, detail="Demasiados intentos de 2FA")
+
+    provided_code = "".join(ch for ch in payload.code if ch.isdigit())
+    try:
+        valid_code = verify_totp_code(
+            TOTP_SECRET_GLOBAL,
+            provided_code,
+            period=TOTP_PERIOD_SECONDS,
+            digits=TOTP_DIGITS,
+            valid_window=TOTP_VALID_WINDOW,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail="2FA no configurado correctamente") from exc
+
+    if not valid_code:
+        challenge.attempts += 1
+        if challenge.attempts >= TWO_FACTOR_MAX_ATTEMPTS:
+            challenge.status = "FAILED"
+        _create_access_log(
+            db,
+            user=user,
+            event_type=AccessEventType.TWO_FACTOR_FAIL,
+            attempt_email=user.email,
+            request=request,
+            detail=f"challenge_id={challenge.id};attempts={challenge.attempts}",
+        )
+        db.commit()
+        raise HTTPException(status_code=401, detail="Codigo incorrecto o expirado")
+
+    challenge.status = "VERIFIED"
+    challenge.verified_at = now
+    challenge.device_notified = False
+    challenge.device_notified_at = None
+
+    role_name = user.role.value if user.role else "user"
+    access_token = create_access_token({"sub": user.email, "role": role_name, "stage": "FULL"})
+    _create_access_log(
+        db,
+        user=user,
+        event_type=AccessEventType.TWO_FACTOR_SUCCESS,
+        attempt_email=user.email,
+        request=request,
+        detail=f"challenge_id={challenge.id}",
+    )
     _create_access_log(
         db,
         user=user,
         event_type=AccessEventType.LOGIN_SUCCESS,
         attempt_email=user.email,
         request=request,
+        detail=f"challenge_id={challenge.id};2FA_OK",
     )
     db.commit()
 
-    role_name = user.role.value if user.role else "user"
-    return {
-        "msg": "Acceso concedido",
-        "rol": role_name,
-        "id": str(user.id),
-        "email": user.email,
-        "name": user.full_name,
-        "avatar_url": _sanitize_avatar_url(user.avatar_url),
-        "token": access_token,
-        "access_token": access_token,
-        "token_type": "bearer",
-    }
+    response = _serialize_login_success(user, access_token)
+    response["requires_2fa"] = False
+    response["two_factor_verified"] = True
+    return response
+
+
+@app.get("/device/notify")
+async def device_notify(serial: str, db: Session = Depends(get_db)):
+    _get_active_device_or_404(serial, db)
+    pending = (
+        db.query(AuthChallenge)
+        .filter(AuthChallenge.status == "VERIFIED", AuthChallenge.device_notified.is_(False))
+        .order_by(AuthChallenge.verified_at.asc(), AuthChallenge.created_at.asc())
+        .first()
+    )
+    if not pending:
+        return {"beep": False, "pattern": None}
+
+    return {"beep": True, "pattern": DEVICE_NOTIFY_PATTERN}
+
+
+@app.post("/device/notify/ack")
+async def device_notify_ack(serial: str, db: Session = Depends(get_db)):
+    _get_active_device_or_404(serial, db)
+    pending = (
+        db.query(AuthChallenge)
+        .filter(AuthChallenge.status == "VERIFIED", AuthChallenge.device_notified.is_(False))
+        .order_by(AuthChallenge.verified_at.asc(), AuthChallenge.created_at.asc())
+        .first()
+    )
+    if not pending:
+        return {"acknowledged": False}
+
+    pending.device_notified = True
+    pending.device_notified_at = _utcnow()
+    db.commit()
+    return {"acknowledged": True, "pattern": DEVICE_NOTIFY_PATTERN}
+
+
+@app.post("/device/ping")
+async def device_ping(serial: str, db: Session = Depends(get_db)):
+    device = _get_active_device_or_404(serial, db)
+    device.last_seen_at = _utcnow()
+    db.commit()
+    return {"ok": True, "serial": device.serial, "last_seen_at": device.last_seen_at.isoformat()}
 
 
 @app.post("/logout")
