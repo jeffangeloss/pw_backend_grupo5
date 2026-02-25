@@ -187,9 +187,18 @@ def _serialize_user(user: User):
         "email": user.email,
         "name": user.full_name,
         "rol": user.role.value if user.role else "user",
-        "avatar_url": user.avatar_url,
+        "avatar_url": _sanitize_avatar_url(user.avatar_url),
         "updated_at": user.updated_at.isoformat() if user.updated_at else None,
     }
+
+
+def _sanitize_avatar_url(avatar_url: str | None):
+    clean_avatar = (avatar_url or "").strip()
+    if not clean_avatar:
+        return None
+    if clean_avatar.startswith("/"):
+        return None
+    return clean_avatar
 
 
 def _validate_avatar_extension(filename: str):
@@ -383,7 +392,7 @@ async def login(login_request: LoginRequest, request: Request, db: Session = Dep
         "id": str(user.id),
         "email": user.email,
         "name": user.full_name,
-        "avatar_url": user.avatar_url,
+        "avatar_url": _sanitize_avatar_url(user.avatar_url),
         "token": access_token,
         "access_token": access_token,
         "token_type": "bearer",
@@ -457,6 +466,8 @@ async def update_my_profile(
 
     if payload.avatar_url is not None:
         clean_avatar = payload.avatar_url.strip()
+        if clean_avatar.startswith("/"):
+            raise HTTPException(status_code=400, detail="La URL de avatar local ya no es valida")
         current_user.avatar_url = clean_avatar or None
 
     current_user.updated_at = datetime.utcnow()
