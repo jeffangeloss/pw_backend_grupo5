@@ -4,11 +4,10 @@ import os
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from fastapi_mail import FastMail, MessageSchema
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..mailing import build_mail_config
+from ..mailing import send_html_email
 from ..models import AccessEventType, AccessLog, User
 from ..schemas import ResetForm, ResetRequest
 from ..security import get_password_hash
@@ -90,10 +89,13 @@ def _build_frontend_reset_link(token: str):
     return f"{frontend_url}/#/restablecer/form?token={token}"
 
 
-async def _send_reset_email(conf, message: MessageSchema, email: str):
+async def _send_reset_email(email: str, html_content: str):
     try:
-        fm = FastMail(conf)
-        await fm.send_message(message)
+        await send_html_email(
+            subject="Restablecer contrasena",
+            recipients=[email],
+            html_body=html_content,
+        )
     except Exception:
         logger.exception("Fallo envio de correo de reset para %s", email)
 
@@ -201,20 +203,7 @@ async def reset_pass_request(
         </body>
         </html>
         """
-        message = MessageSchema(
-            subject="Restablecer contrasena",
-            recipients=[email],
-            body=html_content,
-            subtype="html",
-        )
-
-        conf = build_mail_config()
-        if conf:
-            bg_tasks.add_task(_send_reset_email, conf, message, email)
-        else:
-            logger.warning(
-                "Configuracion SMTP incompleta: SENDER_EMAIL/SENDER_PASSWORD no definidos"
-            )
+        bg_tasks.add_task(_send_reset_email, email, html_content)
 
     return {
         "msg": "Se completo el request",

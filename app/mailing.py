@@ -1,7 +1,8 @@
 import logging
 import os
 
-from fastapi_mail import ConnectionConfig
+import httpx
+from fastapi_mail import ConnectionConfig, FastMail, MessageSchema
 
 logger = logging.getLogger(__name__)
 
@@ -71,4 +72,92 @@ def build_mail_config() -> ConnectionConfig | None:
         USE_CREDENTIALS=True,
         VALIDATE_CERTS=validate_certs,
         TIMEOUT=mail_timeout,
+    )
+
+
+def _resolve_resend_mail_from() -> str:
+    mail_from = (os.getenv("MAIL_FROM") or "").strip()
+    if mail_from:
+        return mail_from
+    return "onboarding@resend.dev"
+
+
+def _build_mail_from_header(mail_from: str) -> str:
+    mail_from_name = (os.getenv("MAIL_FROM_NAME") or "").strip()
+    if mail_from_name:
+        return f"{mail_from_name} <{mail_from}>"
+    return mail_from
+
+
+def _using_resend() -> bool:
+    provider = (os.getenv("MAIL_PROVIDER") or "").strip().lower()
+    if provider == "resend":
+        return True
+    return bool((os.getenv("RESEND_API_KEY") or "").strip())
+
+
+async def _send_email_with_resend(*, subject: str, recipients: list[str], html_body: str):
+    resend_api_key = (os.getenv("RESEND_API_KEY") or "").strip()
+    if not resend_api_key:
+        raise ValueError("Falta RESEND_API_KEY para envio por API")
+
+    mail_from = _resolve_resend_mail_from()
+    payload = {
+        "from": _build_mail_from_header(mail_from),
+        "to": recipients,
+        "subject": subject,
+        "html": html_body,
+    }
+
+    timeout_seconds = _parse_int_env("MAIL_TIMEOUT", 12, min_value=1, max_value=300)
+    request_timeout = httpx.Timeout(timeout_seconds)
+    async with httpx.AsyncClient(timeout=request_timeout) as client:
+        response = await client.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {resend_api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+
+    if response.status_code >= 400:
+        detail = (response.text or "").strip()
+        if len(detail) > 300:
+            detail = detail[:300] + "..."
+        raise RuntimeError(
+            f"Resend respondio {response.status_code}" + (f": {detail}" if detail else "")
+        )
+
+
+async def _send_email_with_smtp(*, subject: str, recipients: list[str], html_body: str):
+    conf = build_mail_config()
+    if not conf:
+        raise ValueError(
+            "Configuracion de correo incompleta: define SENDER_EMAIL y SENDER_PASSWORD"
+        )
+
+    message = MessageSchema(
+        subject=subject,
+        recipients=recipients,
+        body=html_body,
+        subtype="html",
+    )
+    fm = FastMail(conf)
+    await fm.send_message(message)
+
+
+async def send_html_email(*, subject: str, recipients: list[str], html_body: str):
+    if _using_resend():
+        await _send_email_with_resend(
+            subject=subject,
+            recipients=recipients,
+            html_body=html_body,
+        )
+        return
+
+    await _send_email_with_smtp(
+        subject=subject,
+        recipients=recipients,
+        html_body=html_body,
     )
