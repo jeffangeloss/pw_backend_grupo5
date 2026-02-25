@@ -560,7 +560,15 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail={"msg": "User id no encontrado"})
 
-    requested_role = _role_by_type(updated_user.type) if updated_user.type is not None else None
+    requested_role = None
+    if updated_user.type is not None:
+        requested_role = _role_by_type(updated_user.type)
+        if requested_role != user.role:
+            raise HTTPException(
+                status_code=400,
+                detail={"msg": "El rol no puede editarse desde esta pantalla"},
+            )
+
     _ensure_can_update(actor, user, requested_role)
 
     changed_fields = []
@@ -588,10 +596,6 @@ async def update_user(
     if updated_user.password is not None:
         user.password_hash = get_password_hash(updated_user.password)
         changed_fields.append("password")
-    if requested_role is not None and requested_role != user.role:
-        user.role = requested_role
-        changed_fields.append("role")
-
     _add_admin_audit_log(
         db,
         actor=actor,
