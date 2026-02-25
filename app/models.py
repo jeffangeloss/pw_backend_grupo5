@@ -111,7 +111,14 @@ class AccessLog(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
-    event_type = Column(Enum(AccessEventType, name="access_event_type"), nullable=False)
+    event_type = Column(
+        Enum(
+            AccessEventType,
+            name="access_event_type",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+    )
 
     attempt_email = Column(String(100), nullable=False)
     created_at = Column(DateTime, nullable=False, server_default=func.current_timestamp())
