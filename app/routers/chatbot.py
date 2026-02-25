@@ -14,16 +14,10 @@ import threading
 import logging
 import datetime
 
-API_KEY = os.getenv("GEMINI_API_KEY")
-if not API_KEY:
-    raise RuntimeError("Falta GEMINI_API_KEY")
-
-genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash-lite")
-
 router = APIRouter(prefix="/chat", tags=["Chatbot"])
 
 logger = logging.getLogger("chatbot")
+model = None
 
 sessions: Dict[str, dict] = {}
 SESSION_TIMEOUT = 1800
@@ -31,6 +25,39 @@ MAX_CHAT_HISTORY = 3          # últimos 3 turnos
 MAX_EXPENSES_CONTEXT = 10     # últimos 10 egresos
 MAX_ACTIVE_SESSIONS = 20
 lock = threading.Lock()
+
+
+def _resolve_api_key():
+    return (
+        (os.getenv("GEMINI_API_KEY") or "").strip()
+        or (os.getenv("GOOGLE_API_KEY") or "").strip()
+    )
+
+
+def _resolve_model_name():
+    return (os.getenv("GEMINI_MODEL") or "gemini-2.5-flash-lite").strip()
+
+
+def _get_model():
+    global model
+    if model is not None:
+        return model
+
+    api_key = _resolve_api_key()
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Chatbot no configurado: falta GEMINI_API_KEY o GOOGLE_API_KEY",
+        )
+
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(_resolve_model_name())
+    except Exception as exc:
+        logger.exception("No se pudo inicializar el modelo Gemini")
+        raise HTTPException(status_code=503, detail="Chatbot no disponible temporalmente") from exc
+
+    return model
 
 
 class ChatRequest(BaseModel):
@@ -120,6 +147,7 @@ def get_expenses_stats(
 @router.post("/")
 async def chat(request: ChatRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
+        current_model = _get_model()
         cleanup_sessions()
         user_id = str(user.id)
 
@@ -159,15 +187,20 @@ ULTIMOS EGRESOS:
 """
 
                 sessions[user_id] = {
-                    "chat": model.start_chat(history=[{"role": "system", "parts": [contexto]}]),
+                    "chat": current_model.start_chat(
+                        history=[{"role": "user", "parts": [f"Contexto de trabajo:\n{contexto}"]}]
+                    ),
                     "last_used": time.time()
                 }
 
             user_session = sessions[user_id]
             user_session["last_used"] = time.time()
 
-            chat_history = user_session["chat"].history[-MAX_CHAT_HISTORY:]
-            user_session["chat"].history = chat_history
+            try:
+                chat_history = user_session["chat"].history[-MAX_CHAT_HISTORY:]
+                user_session["chat"].history = chat_history
+            except Exception:
+                pass
 
         response = user_session["chat"].send_message(
             request.message,
