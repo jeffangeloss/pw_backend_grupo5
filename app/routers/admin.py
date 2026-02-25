@@ -269,7 +269,7 @@ async def verify_admin_token(
         raise HTTPException(status_code=403, detail={"msg": "Token incorrecto"})
 
     user = db.query(User).filter(User.email == email).first()
-    if not user:
+    if not user or not user.is_active or not user.email_verified:
         raise HTTPException(status_code=403, detail={"msg": "Token incorrecto"})
 
     if user.role not in ADMIN_PANEL_ROLES:

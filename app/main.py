@@ -428,7 +428,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     )
 
     user = _get_user_from_token(token, db)
-    if not user:
+    if not user or not user.is_active or not user.email_verified:
         raise credentials_exception
     return user
 

@@ -106,7 +106,7 @@ def get_current_user(
 ):
     user = _get_user_from_token(token, db)
 
-    if not user:
+    if not user or not user.is_active or not user.email_verified:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="No autorizado",
