@@ -21,18 +21,30 @@ model = None
 
 sessions: Dict[str, dict] = {}
 SESSION_TIMEOUT = 1800
-MAX_CHAT_HISTORY = 3          # últimos 3 turnos
-MAX_EXPENSES_CONTEXT = 10     # últimos 10 egresos
+MAX_CHAT_HISTORY = 3
+MAX_EXPENSES_CONTEXT = 10
 MAX_ACTIVE_SESSIONS = 20
 lock = threading.Lock()
 
 
-def _resolve_api_key():
+def _resolve_api_key() -> str:
     return (os.getenv("GEMINI_API_KEY") or "").strip()
 
 
-def _resolve_model_name():
+def _resolve_model_name() -> str:
     return (os.getenv("GEMINI_MODEL") or "gemini-2.5-flash-lite").strip()
+
+
+def _resolve_max_output_tokens() -> int:
+    raw = (os.getenv("CHAT_MAX_OUTPUT_TOKENS") or "700").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 700
+    return max(128, min(value, 2048))
+
+
+MAX_OUTPUT_TOKENS = _resolve_max_output_tokens()
 
 
 def _get_model():
@@ -141,6 +153,22 @@ def get_expenses_stats(
     return {"total": float(total_general or 0), "monthly": monthly, "by_category": by_category}
 
 
+def _response_cut_by_tokens(response) -> bool:
+    try:
+        candidates = getattr(response, "candidates", None) or []
+        if not candidates:
+            return False
+
+        reason = getattr(candidates[0], "finish_reason", None)
+        if reason is None:
+            return False
+
+        reason_text = str(reason).upper()
+        return "MAX_TOKENS" in reason_text or str(reason) == "2"
+    except Exception:
+        return False
+
+
 @router.post("/")
 async def chat(request: ChatRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
@@ -165,16 +193,19 @@ async def chat(request: ChatRequest, user: User = Depends(get_current_user), db:
                 )
 
                 expenses_list = [
-                    {"amount": float(e.amount),
-                     "category": e.category.name if e.category else None,
-                     "date": str(e.expense_date)}
+                    {
+                        "amount": float(e.amount),
+                        "category": e.category.name if e.category else None,
+                        "date": str(e.expense_date),
+                    }
                     for e in expenses
                 ]
 
                 contexto = f"""
 Eres un asesor financiero personal.
-Responde de forma amigable y clara, como un asistente útil y concreto.
-Hoy día es {datetime.datetime.today()}.
+Responde de forma amigable y clara, como un asistente util y concreto.
+No dejes frases incompletas.
+Hoy dia es {datetime.datetime.today()}.
 
 ESTADISTICAS:
 {stats}
@@ -187,7 +218,7 @@ ULTIMOS EGRESOS:
                     "chat": current_model.start_chat(
                         history=[{"role": "user", "parts": [f"Contexto de trabajo:\n{contexto}"]}]
                     ),
-                    "last_used": time.time()
+                    "last_used": time.time(),
                 }
 
             user_session = sessions[user_id]
@@ -201,16 +232,27 @@ ULTIMOS EGRESOS:
 
         response = user_session["chat"].send_message(
             request.message,
-            generation_config={"temperature": 0.4, "max_output_tokens": 300}
+            generation_config={"temperature": 0.4, "max_output_tokens": MAX_OUTPUT_TOKENS},
         )
 
         if not response or not response.text:
-            raise HTTPException(500, "Respuesta vacía del modelo")
+            raise HTTPException(500, "Respuesta vacia del modelo")
 
-        return {"text": response.text}
+        text = response.text
+
+        # If output was cut by token limit, ask for a short continuation.
+        if _response_cut_by_tokens(response):
+            continuation = user_session["chat"].send_message(
+                "Continua exactamente donde te quedaste, sin repetir, y cierra con una frase completa.",
+                generation_config={"temperature": 0.2, "max_output_tokens": 220},
+            )
+            if continuation and continuation.text:
+                text = f"{text.rstrip()}\n{continuation.text.strip()}"
+
+        return {"text": text}
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("Error en chatbot")
         raise HTTPException(500, "Error generando respuesta")
