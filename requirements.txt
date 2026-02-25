@@ -26,7 +26,7 @@ fastapi-mail==1.6.2
 fastar==0.8.0
 frozenlist==1.8.0
 google-ai-generativelanguage==0.6.15
-google-api-core==2.30.0
+google-api-core==2.25.2
 google-api-python-client==2.190.0
 google-auth==2.48.0
 google-auth-httplib2==0.3.0
